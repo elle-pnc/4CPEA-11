@@ -1,0 +1,75 @@
+.button {
+  font-weight: 600;
+  border-radius: 0.75rem;
+  transition: all 0.2s ease-in-out;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  border: none;
+  cursor: pointer;
+}
+
+/* Sizes */
+.button-small {
+  padding: 0.5rem 1rem;
+  font-size: 0.875rem;
+}
+
+.button-medium,
+.button-md {
+  padding: 0.875rem 1.75rem;
+  font-size: 1rem;
+  min-height: 2.75rem;
+}
+
+.button-large {
+  padding: 1rem 2rem;
+  font-size: 1.125rem;
+  min-height: 3rem;
+}
+
+/* Variants */
+.button-primary {
+  background: linear-gradient(to right, rgb(37, 99, 235), rgb(29, 78, 216));
+  color: white;
+  box-shadow: 0 10px 15px -3px rgba(37, 99, 235, 0.3), 0 4px 6px -2px rgba(37, 99, 235, 0.3);
+}
+
+.button-primary:hover {
+  background: linear-gradient(to right, rgb(29, 78, 216), rgb(30, 64, 175));
+  box-shadow: 0 20px 25px -5px rgba(37, 99, 235, 0.4), 0 10px 10px -5px rgba(37, 99, 235, 0.4);
+}
+
+.button-danger {
+  background: linear-gradient(to right, rgb(220, 38, 38), rgb(185, 28, 28));
+  color: white;
+  box-shadow: 0 10px 15px -3px rgba(220, 38, 38, 0.3), 0 4px 6px -2px rgba(220, 38, 38, 0.3);
+}
+
+.button-danger:hover {
+  background: linear-gradient(to right, rgb(185, 28, 28), rgb(153, 27, 27));
+  box-shadow: 0 20px 25px -5px rgba(220, 38, 38, 0.4), 0 10px 10px -5px rgba(220, 38, 38, 0.4);
+}
+
+.button-secondary {
+  background-color: rgb(229, 231, 235);
+  color: rgb(31, 41, 55);
+}
+
+.button-secondary:hover {
+  background-color: rgb(209, 213, 219);
+}
+
+.button-ghost {
+  background-color: transparent;
+  color: rgb(75, 85, 99);
+}
+
+.button-ghost:hover {
+  background-color: rgb(243, 244, 246);
+}
+
+.button:active {
+  transform: scale(0.95);
+}
