@@ -1,0 +1,132 @@
+.dashboard-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 2rem;
+  animation: slideUp 0.5s ease-out;
+  position: relative;
+}
+
+.dashboard-header-left {
+  flex: 1;
+}
+
+.dashboard-header-badge {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.25rem;
+}
+
+.dashboard-status-dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  background-color: #22c55e;
+  border-radius: 9999px;
+  animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+.dashboard-app-name {
+  color: rgb(37, 99, 235);
+  font-size: 0.875rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.dashboard-title {
+  font-size: 2.25rem;
+  font-weight: 700;
+  background: linear-gradient(to right, rgb(17, 24, 39), rgb(55, 65, 81));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  margin-top: 0.25rem;
+}
+
+@media (min-width: 1024px) {
+  .dashboard-title {
+    font-size: 3rem;
+  }
+}
+
+.dashboard-header-right {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.dashboard-vehicle-info {
+  display: none;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 1rem;
+  background-color: #FEFEFE;
+  border-radius: 0.75rem;
+  box-shadow: 0 2px 15px -3px rgba(0, 0, 0, 0.07), 0 10px 20px -2px rgba(0, 0, 0, 0.04);
+  border: 1px solid rgb(243, 244, 246);
+}
+
+@media (min-width: 640px) {
+  .dashboard-vehicle-info {
+    display: flex;
+  }
+}
+
+.dashboard-vehicle-icon {
+  width: 1rem;
+  height: 1rem;
+  color: rgb(37, 99, 235);
+}
+
+.dashboard-vehicle-text {
+  color: rgb(55, 65, 81);
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+
+.dashboard-vehicle-number {
+  color: rgb(37, 99, 235);
+  font-weight: 600;
+}
+
+.dashboard-menu-button {
+  position: fixed;
+  top: 1.5rem;
+  right: 1.5rem;
+  padding: 0.625rem;
+  background-color: #FEFEFE;
+  border: 1px solid rgb(229, 231, 235);
+  border-radius: 0.75rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px -1px rgba(0, 0, 0, 0.1);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.dashboard-menu-button:hover {
+  background-color: rgb(249, 250, 251);
+  box-shadow: 0 2px 15px -3px rgba(0, 0, 0, 0.07), 0 10px 20px -2px rgba(0, 0, 0, 0.04);
+}
+
+.dashboard-menu-button:active {
+  transform: scale(0.95);
+}
+
+.dashboard-menu-icon {
+  width: 1.5rem;
+  height: 1.5rem;
+  color: rgb(55, 65, 81);
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
