@@ -73,6 +73,18 @@
   flex-shrink: 0;
 }
 
+.code-input.error {
+  border-color: var(--accent-error);
+  background-color: rgba(244, 67, 54, 0.1);
+  color: var(--accent-error);
+  animation: shake 0.5s;
+}
+
+.code-input.error:focus {
+  border-color: var(--accent-error);
+  box-shadow: 0 0 0 3px rgba(244, 67, 54, 0.2);
+}
+
 @media (max-width: 480px) {
   .code-input {
     width: 40px;
@@ -122,4 +134,119 @@
 .verify-button:disabled {
   opacity: 0.6;
   cursor: not-allowed;
+}
+
+/* Shake animation for error state */
+@keyframes shake {
+  0%, 100% {
+    transform: translateX(0);
+  }
+  10%, 30%, 50%, 70%, 90% {
+    transform: translateX(-8px);
+  }
+  20%, 40%, 60%, 80% {
+    transform: translateX(8px);
+  }
+}
+
+.code-inputs-container.shake {
+  animation: shake 0.5s;
+}
+
+.remember-device-container {
+  margin-top: 24px;
+  margin-bottom: 20px;
+  width: 100%;
+  max-width: 360px;
+}
+
+.remember-device-checkbox {
+  display: flex;
+  align-items: flex-start;
+  cursor: pointer;
+  user-select: none;
+  gap: 12px;
+}
+
+.remember-device-checkbox input[type="checkbox"] {
+  position: absolute;
+  opacity: 0;
+  cursor: pointer;
+  height: 0;
+  width: 0;
+}
+
+.remember-device-checkbox .checkmark {
+  position: relative;
+  height: 20px;
+  width: 20px;
+  min-width: 20px;
+  background-color: var(--input-bg);
+  border: 2px solid var(--input-border);
+  border-radius: 4px;
+  transition: all 0.2s;
+  margin-top: 2px;
+}
+
+.remember-device-checkbox:hover .checkmark {
+  border-color: var(--accent-primary);
+}
+
+.remember-device-checkbox input:checked ~ .checkmark {
+  background-color: var(--accent-primary);
+  border-color: var(--accent-primary);
+}
+
+.remember-device-checkbox input:checked ~ .checkmark:after {
+  content: "";
+  position: absolute;
+  display: block;
+  left: 6px;
+  top: 2px;
+  width: 5px;
+  height: 10px;
+  border: solid white;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+.remember-device-label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+}
+
+.remember-device-text {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-primary);
+  line-height: 1.4;
+}
+
+.remember-device-desc {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.3;
+}
+
+.remember-device-checkbox input:disabled ~ .checkmark,
+.remember-device-checkbox input:disabled ~ .remember-device-label {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+@media (max-width: 480px) {
+  .remember-device-container {
+    margin-top: 20px;
+    margin-bottom: 16px;
+  }
+  
+  .remember-device-text {
+    font-size: 13px;
+  }
+  
+  .remember-device-desc {
+    font-size: 11px;
+  }
 }

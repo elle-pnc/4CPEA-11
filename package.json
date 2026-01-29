@@ -6,9 +6,17 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "firebase": "./node_modules/.bin/firebase",
+    "firebase:login": "npm run firebase login",
+    "firebase:init": "npm run firebase init functions",
+    "firebase:deploy": "./node_modules/.bin/firebase deploy --only functions",
+    "firebase:config:get": "npm run firebase functions:config:get",
+    "firebase:config:set": "npm run firebase functions:config:set",
+    "firebase:logs": "npm run firebase functions:log"
   },
   "dependencies": {
+    "firebase": "^10.14.1",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-icons": "^5.5.0",
@@ -18,6 +26,7 @@
     "@types/react": "^18.2.43",
     "@types/react-dom": "^18.2.17",
     "@vitejs/plugin-react": "^4.2.1",
+    "firebase-tools": "^15.3.0",
     "vite": "^5.0.8"
   }
 }

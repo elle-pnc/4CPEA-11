@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Register Account - AFCS</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .register-container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            width: 100%;
+            max-width: 500px;
+            padding: 40px;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+
+        .logo {
+            width: 80px;
+            height: 80px;
+            margin: 0 auto 20px;
+            background: #667eea;
+            border-radius: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 32px;
+            font-weight: bold;
+            color: white;
+        }
+
+        h1 {
+            color: #333;
+            font-size: 28px;
+            margin-bottom: 8px;
+        }
+
+        .subtitle {
+            color: #666;
+            font-size: 14px;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        label {
+            display: block;
+            color: #333;
+            font-weight: 500;
+            margin-bottom: 8px;
+            font-size: 14px;
+        }
+
+        input {
+            width: 100%;
+            padding: 12px 16px;
+            border: 2px solid #e0e0e0;
+            border-radius: 12px;
+            font-size: 16px;
+            transition: all 0.3s ease;
+            font-family: inherit;
+        }
+
+        input:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+
+        input::placeholder {
+            color: #999;
+        }
+
+        .password-group {
+            position: relative;
+        }
+
+        .password-toggle {
+            position: absolute;
+            right: 12px;
+            top: 50%;
+            transform: translateY(-50%);
+            background: none;
+            border: none;
+            cursor: pointer;
+            color: #666;
+            font-size: 20px;
+            padding: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .password-toggle:hover {
+            color: #333;
+        }
+
+        .error-message {
+            background: #fee;
+            color: #c33;
+            padding: 12px 16px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-size: 14px;
+            display: none;
+        }
+
+        .error-message.show {
+            display: block;
+        }
+
+        .success-message {
+            background: #efe;
+            color: #3c3;
+            padding: 12px 16px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-size: 14px;
+            display: none;
+        }
+
+        .success-message.show {
+            display: block;
+        }
+
+        .register-button {
+            width: 100%;
+            padding: 14px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 12px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            margin-top: 10px;
+        }
+
+        .register-button:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 20px rgba(102, 126, 234, 0.4);
+        }
+
+        .register-button:active:not(:disabled) {
+            transform: translateY(0);
+        }
+
+        .register-button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        .loading {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            border-top-color: white;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            margin-right: 8px;
+            vertical-align: middle;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .info-text {
+            margin-top: 20px;
+            padding: 12px;
+            background: #f5f5f5;
+            border-radius: 8px;
+            font-size: 13px;
+            color: #666;
+            line-height: 1.6;
+        }
+
+        .info-text strong {
+            color: #333;
+        }
+
+        .back-link {
+            display: block;
+            text-align: center;
+            margin-top: 20px;
+            color: #667eea;
+            text-decoration: none;
+            font-size: 14px;
+            font-weight: 500;
+        }
+
+        .back-link:hover {
+            text-decoration: underline;
+        }
+    </style>
+</head>
+<body>
+    <div class="register-container">
+        <div class="header">
+            <div class="logo">AFCS</div>
+            <h1>Register Account</h1>
+            <p class="subtitle">Create a new user account</p>
+        </div>
+
+        <div class="error-message" id="errorMessage"></div>
+        <div class="success-message" id="successMessage"></div>
+
+        <form id="registerForm">
+            <div class="form-group">
+                <label for="email">Email Address *</label>
+                <input 
+                    type="email" 
+                    id="email" 
+                    name="email" 
+                    placeholder="user@example.com" 
+                    required 
+                    autocomplete="email"
+                >
+            </div>
+
+            <div class="form-group">
+                <label for="password">Password *</label>
+                <div class="password-group">
+                    <input 
+                        type="password" 
+                        id="password" 
+                        name="password" 
+                        placeholder="Minimum 6 characters" 
+                        required 
+                        minlength="6"
+                        autocomplete="new-password"
+                    >
+                    <button 
+                        type="button" 
+                        class="password-toggle" 
+                        onclick="togglePassword()"
+                        tabindex="-1"
+                    >
+                        👁️
+                    </button>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label for="firstName">First Name *</label>
+                <input 
+                    type="text" 
+                    id="firstName" 
+                    name="firstName" 
+                    placeholder="John" 
+                    required
+                >
+            </div>
+
+            <div class="form-group">
+                <label for="lastName">Last Name *</label>
+                <input 
+                    type="text" 
+                    id="lastName" 
+                    name="lastName" 
+                    placeholder="Doe" 
+                    required
+                >
+            </div>
+
+            <div class="form-group">
+                <label for="phoneNumber">Phone Number</label>
+                <input 
+                    type="tel" 
+                    id="phoneNumber" 
+                    name="phoneNumber" 
+                    placeholder="+63 912 345 6789"
+                >
+            </div>
+
+            <div class="form-group">
+                <label for="initialBalance">Initial Balance (₱)</label>
+                <input 
+                    type="number" 
+                    id="initialBalance" 
+                    name="initialBalance" 
+                    placeholder="250.00" 
+                    step="0.01"
+                    min="0"
+                    value="250.00"
+                >
+            </div>
+
+            <button type="submit" class="register-button" id="registerButton">
+                Register Account
+            </button>
+        </form>
+
+        <div class="info-text">
+            <strong>Note:</strong> This form creates accounts in Firebase Authentication and Firestore. 
+            The account will be immediately available for login. Make sure you have proper Firebase 
+            configuration in the script below.
+        </div>
+
+        <a href="index.html" class="back-link">← Back to App</a>
+    </div>
+
+    <!-- Firebase SDK -->
+    <script type="module">
+        import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js';
+        import { 
+            getAuth, 
+            createUserWithEmailAndPassword,
+            sendEmailVerification
+        } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js';
+        import { 
+            getFirestore, 
+            doc, 
+            setDoc, 
+            serverTimestamp,
+            getDoc
+        } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
+
+        // Firebase configuration - REPLACE WITH YOUR CONFIG
+        const firebaseConfig = {
+            apiKey: "AIzaSyBEL5bdqeTnZrzflBXgZx0gEmLx0j7ogWE",
+            authDomain: "cpe11-48f3f.firebaseapp.com",
+            databaseURL: "https://cpe11-48f3f-default-rtdb.asia-southeast1.firebasedatabase.app",
+            projectId: "cpe11-48f3f",
+            storageBucket: "cpe11-48f3f.firebasestorage.app",
+            messagingSenderId: "747480448864",
+            appId: "1:747480448864:web:99b8b1d7657cf326826805",
+            measurementId: "G-FYYNR9PKL3"
+        };
+
+        // Initialize Firebase
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+
+        // Helper functions
+        function showError(message) {
+            const errorDiv = document.getElementById('errorMessage');
+            errorDiv.textContent = message;
+            errorDiv.classList.add('show');
+            document.getElementById('successMessage').classList.remove('show');
+            setTimeout(() => {
+                errorDiv.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            }, 100);
+        }
+
+        function showSuccess(message) {
+            const successDiv = document.getElementById('successMessage');
+            successDiv.textContent = message;
+            successDiv.classList.add('show');
+            document.getElementById('errorMessage').classList.remove('show');
+        }
+
+        function hideMessages() {
+            document.getElementById('errorMessage').classList.remove('show');
+            document.getElementById('successMessage').classList.remove('show');
+        }
+
+        // Toggle password visibility
+        window.togglePassword = function() {
+            const passwordInput = document.getElementById('password');
+            const toggleButton = passwordInput.nextElementSibling;
+            
+            if (passwordInput.type === 'password') {
+                passwordInput.type = 'text';
+                toggleButton.textContent = '🙈';
+            } else {
+                passwordInput.type = 'password';
+                toggleButton.textContent = '👁️';
+            }
+        };
+
+        // Create user in Firestore
+        async function createFirestoreUser(userId, userData) {
+            try {
+                const userRef = doc(db, 'users', userId);
+                
+                // Check if user already exists
+                const userSnap = await getDoc(userRef);
+                if (userSnap.exists()) {
+                    console.log('User already exists in Firestore, updating...');
+                }
+
+                const defaultUserData = {
+                    email: userData.email || '',
+                    firstName: userData.firstName || '',
+                    lastName: userData.lastName || '',
+                    phoneNumber: userData.phoneNumber || '',
+                    cardNumber: userData.cardNumber || '0000 0000 0000',
+                    balance: parseFloat(userData.balance) || 250.00,
+                    currentTerminal: 1,
+                    currentRoute: null,
+                    language: 'English',
+                    theme: 'light',
+                    status: null,
+                    createdAt: serverTimestamp(),
+                    updatedAt: serverTimestamp()
+                };
+
+                await setDoc(userRef, defaultUserData, { merge: true });
+                return defaultUserData;
+            } catch (error) {
+                console.error('Error creating Firestore user:', error);
+                throw error;
+            }
+        }
+
+        // Handle form submission
+        document.getElementById('registerForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            hideMessages();
+
+            const button = document.getElementById('registerButton');
+            const originalText = button.innerHTML;
+            button.disabled = true;
+            button.innerHTML = '<span class="loading"></span> Creating Account...';
+
+            try {
+                // Get form values
+                const email = document.getElementById('email').value.trim();
+                const password = document.getElementById('password').value;
+                const firstName = document.getElementById('firstName').value.trim();
+                const lastName = document.getElementById('lastName').value.trim();
+                const phoneNumber = document.getElementById('phoneNumber').value.trim();
+                const initialBalance = parseFloat(document.getElementById('initialBalance').value) || 250.00;
+
+                // Validate email format
+                const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+                if (!emailRegex.test(email)) {
+                    throw new Error('Please enter a valid email address');
+                }
+
+                // Validate password length
+                if (password.length < 6) {
+                    throw new Error('Password must be at least 6 characters long');
+                }
+
+                // Validate names
+                if (!firstName || !lastName) {
+                    throw new Error('First name and last name are required');
+                }
+
+                // Create user in Firebase Authentication
+                console.log('Creating user in Firebase Auth...');
+                const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+                const user = userCredential.user;
+                console.log('User created in Firebase Auth:', user.uid);
+
+                // Send email verification
+                try {
+                    await sendEmailVerification(user);
+                    console.log('Verification email sent');
+                } catch (verifyError) {
+                    console.warn('Could not send verification email:', verifyError);
+                    // Don't fail the registration if email verification fails
+                }
+
+                // Create user document in Firestore
+                console.log('Creating user in Firestore...');
+                await createFirestoreUser(user.uid, {
+                    email: email,
+                    firstName: firstName,
+                    lastName: lastName,
+                    phoneNumber: phoneNumber,
+                    balance: initialBalance,
+                    cardNumber: '0000 0000 0000'
+                });
+                console.log('User created in Firestore');
+
+                // Show success message
+                showSuccess(`Account created successfully! User ID: ${user.uid}`);
+                
+                // Reset form
+                document.getElementById('registerForm').reset();
+                document.getElementById('initialBalance').value = '250.00';
+
+                // Scroll to top to see success message
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+
+            } catch (error) {
+                console.error('Registration error:', error);
+                
+                let errorMessage = 'Failed to create account. ';
+                
+                if (error.code === 'auth/email-already-in-use') {
+                    errorMessage = 'This email address is already registered. Please use a different email.';
+                } else if (error.code === 'auth/invalid-email') {
+                    errorMessage = 'Invalid email address format.';
+                } else if (error.code === 'auth/weak-password') {
+                    errorMessage = 'Password is too weak. Please use a stronger password.';
+                } else if (error.code === 'auth/operation-not-allowed') {
+                    errorMessage = 'Email/password accounts are not enabled. Please check Firebase configuration.';
+                } else if (error.code === 'permission-denied') {
+                    errorMessage = 'Permission denied. Please check Firestore security rules.';
+                } else if (error.message) {
+                    errorMessage = error.message;
+                } else {
+                    errorMessage += error.toString();
+                }
+                
+                showError(errorMessage);
+            } finally {
+                button.disabled = false;
+                button.innerHTML = originalText;
+            }
+        });
+    </script>
+</body>
+</html>

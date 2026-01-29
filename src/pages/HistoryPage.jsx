@@ -10,7 +10,10 @@ const HistoryPage = ({ userData }) => {
 
   const formatDate = (date) => {
     if (!date) return ''
-    const d = new Date(date)
+    // Handle Firestore Timestamp objects or Date objects
+    const d = date instanceof Date ? date : (date.toDate ? date.toDate() : new Date(date))
+    if (isNaN(d.getTime())) return ''
+    
     const now = new Date()
     const diffTime = Math.abs(now - d)
     const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24))
@@ -50,12 +53,16 @@ const HistoryPage = ({ userData }) => {
 
   // Group transactions by date
   const groupedTransactions = transactions.reduce((groups, transaction) => {
-    const date = new Date(transaction.timestamp)
-    const dateKey = date.toDateString()
-    if (!groups[dateKey]) {
-      groups[dateKey] = []
+    // Handle Firestore Timestamp objects or Date objects
+    const timestamp = transaction.timestamp || transaction.createdAt
+    const date = timestamp instanceof Date ? timestamp : (timestamp?.toDate ? timestamp.toDate() : new Date(timestamp))
+    if (!isNaN(date.getTime())) {
+      const dateKey = date.toDateString()
+      if (!groups[dateKey]) {
+        groups[dateKey] = []
+      }
+      groups[dateKey].push(transaction)
     }
-    groups[dateKey].push(transaction)
     return groups
   }, {})
 
@@ -98,15 +105,20 @@ const HistoryPage = ({ userData }) => {
                           <span className="transaction-type">{getTransactionTypeLabel(transaction.type)}</span>
                           <span className="transaction-amount">
                             {transaction.type === 'top-up' ? (
-                              <span className="amount-positive">+₱{transaction.amount?.toLocaleString() || '0'}</span>
+                              <span className="amount-positive">+₱{Math.abs(transaction.amount || 0).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</span>
                             ) : (
-                              <span className="amount-negative">-₱{transaction.fare?.toFixed(2) || '0.00'}</span>
+                              <span className="amount-negative">-₱{Math.abs(transaction.amount || 0).toFixed(2)}</span>
                             )}
                           </span>
                         </div>
                         <div className="transaction-secondary">
-                          <span className="transaction-description">{transaction.description}</span>
-                          <span className="transaction-time">{formatDate(transaction.timestamp)}</span>
+                          <span className="transaction-description">
+                            {transaction.description || (transaction.route ? `Trip: Terminal ${transaction.route.from} → Terminal ${transaction.route.to}` : 'Trip')}
+                            {transaction.type === 'trip' && transaction.jeepneyId && (
+                              <span className="transaction-jeepney"> • {transaction.jeepneyId === 'jeep1' ? 'Jeep 1' : transaction.jeepneyId}</span>
+                            )}
+                          </span>
+                          <span className="transaction-time">{formatDate(transaction.timestamp || transaction.createdAt)}</span>
                         </div>
                         {transaction.id && (
                           <div className="transaction-id">

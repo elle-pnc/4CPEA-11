@@ -173,14 +173,15 @@
   transform: translateY(0);
 }
 
-/* Warning Modal */
-.warning-modal-overlay {
+/* Custom Modal System - Shared styles */
+.custom-modal-overlay {
   position: fixed;
   top: 0;
   left: 0;
   right: 0;
   bottom: 0;
-  background-color: var(--modal-overlay);
+  background-color: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -189,78 +190,26 @@
   animation: fadeIn 0.3s ease;
 }
 
-.warning-modal {
+.custom-modal {
   background-color: var(--modal-bg);
-  border-radius: 16px;
+  border-radius: 20px;
   padding: 32px 24px;
   width: 100%;
-  max-width: 400px;
-  box-shadow: 0 8px 32px var(--card-shadow-hover);
-  text-align: center;
+  max-width: 420px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+  animation: slideUp 0.3s ease;
+  position: relative;
 }
 
-.warning-icon {
-  font-size: 48px;
-  margin-bottom: 16px;
-}
-
-.warning-modal-title {
-  font-size: 24px;
-  font-weight: bold;
-  color: var(--text-primary);
-  margin-bottom: 12px;
-}
-
-.warning-modal-message {
-  font-size: 16px;
-  color: var(--text-secondary);
-  margin-bottom: 24px;
-  line-height: 1.5;
-}
-
-.warning-modal-actions {
-  display: flex;
-  gap: 12px;
-}
-
-.warning-cancel-btn,
-.warning-confirm-btn {
-  flex: 1;
-  padding: 14px;
-  border: none;
-  border-radius: 12px;
-  font-size: 16px;
-  font-weight: bold;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.warning-cancel-btn {
-  background-color: var(--bg-tertiary);
-  color: var(--text-primary);
-}
-
-.warning-cancel-btn:hover {
-  background-color: var(--border-color);
-}
-
-.warning-cancel-btn:active {
-  background-color: var(--border-color);
-}
-
-.warning-confirm-btn {
-  background-color: var(--accent-error);
-  color: #ffffff;
-  box-shadow: 0 2px 8px rgba(244, 67, 54, 0.3);
-}
-
-.warning-confirm-btn:hover {
-  background-color: #d32f2f;
-  box-shadow: 0 4px 12px rgba(244, 67, 54, 0.4);
-}
-
-.warning-confirm-btn:active {
-  background-color: #c62828;
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px) scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
 }
 
 @keyframes fadeIn {
@@ -270,6 +219,114 @@
   to {
     opacity: 1;
   }
+}
+
+.modal-icon-wrapper {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  margin-bottom: 20px;
+}
+
+.modal-icon {
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 36px;
+  font-weight: bold;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+}
+
+.warning-icon-wrapper .warning-icon-circle {
+  background: linear-gradient(135deg, #ff9800, #f57c00);
+  color: #ffffff;
+  animation: pulse 2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.05);
+  }
+}
+
+.modal-title {
+  font-size: 22px;
+  font-weight: bold;
+  color: var(--text-primary);
+  margin-bottom: 12px;
+  text-align: center;
+}
+
+.modal-message {
+  font-size: 15px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+  text-align: center;
+  margin-bottom: 20px;
+}
+
+.modal-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 24px;
+}
+
+.modal-btn {
+  flex: 1;
+  padding: 14px 20px;
+  border: none;
+  border-radius: 12px;
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.modal-btn.primary-btn {
+  background: linear-gradient(135deg, var(--accent-primary), var(--accent-primary-dark));
+  color: #ffffff;
+  box-shadow: 0 2px 8px rgba(30, 136, 229, 0.3);
+}
+
+.modal-btn.primary-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(30, 136, 229, 0.4);
+}
+
+.modal-btn.secondary-btn {
+  background-color: var(--bg-tertiary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+}
+
+.modal-btn.secondary-btn:hover {
+  background-color: var(--border-color);
+  border-color: var(--text-secondary);
+}
+
+.modal-btn.danger-btn {
+  background: linear-gradient(135deg, #f44336, #d32f2f);
+  color: #ffffff;
+  box-shadow: 0 2px 8px rgba(244, 67, 54, 0.3);
+}
+
+.modal-btn.danger-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(244, 67, 54, 0.4);
+}
+
+.warning-modal {
+  border-top: 4px solid #ff9800;
 }
 
 .terminal-info {

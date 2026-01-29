@@ -4,6 +4,10 @@
   background-color: var(--bg-secondary);
 }
 
+[data-theme="dark"] .app {
+  background-color: #000000;
+}
+
 /* Mobile container */
 .mobile-container {
   max-width: 414px;
@@ -12,4 +16,8 @@
   background-color: var(--bg-primary);
   position: relative;
   overflow-x: hidden;
+}
+
+[data-theme="dark"] .mobile-container {
+  background-color: #000000;
 }
