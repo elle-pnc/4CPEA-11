@@ -3,6 +3,8 @@ import {
   collection, 
   doc, 
   getDoc, 
+  getDocs,
+  onSnapshot,
   setDoc, 
   updateDoc, 
   addDoc,
@@ -10,7 +12,6 @@ import {
   where,
   orderBy,
   limit,
-  getDocs,
   serverTimestamp,
   increment,
   arrayUnion,
@@ -25,6 +26,42 @@ const COLLECTIONS = {
   VERIFICATION_CODES: 'verificationCodes',
   JEEPNEYS: 'jeepneys'
 };
+
+/**
+ * Subscribe to user document in real time
+ * @param {string} userId - Firebase Auth UID
+ * @param {function} callback - Called with user data on each update
+ * @returns {function} Unsubscribe function
+ */
+export const subscribeUser = (userId, callback) => {
+  const userRef = doc(db, COLLECTIONS.USERS, userId);
+  return onSnapshot(userRef, (docSnap) => {
+    if (docSnap.exists()) {
+      callback({ id: docSnap.id, ...docSnap.data() });
+    } else {
+      callback(null);
+    }
+  }, (error) => {
+    console.error('Error subscribing to user:', error);
+    callback(null);
+  });
+};
+
+/** Get user role from Firestore. Returns 'admin'|'driver'|'commuter'|null */
+export const getUserRole = async (userId) => {
+  if (!userId) return null
+  try {
+    const userRef = doc(db, COLLECTIONS.USERS, userId)
+    const snap = await getDoc(userRef)
+    if (snap.exists()) {
+      const role = snap.data()?.role
+      return role === 'admin' || role === 'driver' || role === 'commuter' ? role : null
+    }
+    return null
+  } catch {
+    return null
+  }
+}
 
 // Helper function to check both 'User' and 'users' collections for migration
 const getUserFromAnyCollection = async (userId) => {
@@ -77,34 +114,41 @@ export const createOrGetUser = async (userId, userData = {}) => {
     const existingUser = await getUserFromAnyCollection(userId);
     
     if (existingUser) {
-      // Ensure cardNumber exists, if not set default
+      const usersRef = doc(db, COLLECTIONS.USERS, userId);
+      const updates = {};
       if (!existingUser.data.cardNumber) {
         existingUser.data.cardNumber = '0000 0000 0000';
-        // Update in Firestore
-        if (existingUser.collection === 'User') {
-          // Will be migrated below
-        } else {
-          const usersRef = doc(db, COLLECTIONS.USERS, userId);
-          await updateDoc(usersRef, { cardNumber: '0000 0000 0000' });
-        }
+        updates.cardNumber = '0000 0000 0000';
       }
-      
+      if (existingUser.data.role === undefined || existingUser.data.role === null) {
+        existingUser.data.role = 'commuter';
+        updates.role = 'commuter';
+      }
+      if (existingUser.data.isActive === undefined || existingUser.data.isActive === null) {
+        existingUser.data.isActive = true;
+        updates.isActive = true;
+      }
+      if (Object.keys(updates).length > 0 && existingUser.collection !== 'User') {
+        await updateDoc(usersRef, { ...updates, updatedAt: serverTimestamp() });
+      }
+
       // User exists - migrate to 'users' if in 'User' collection
       if (existingUser.collection === 'User') {
         console.log(`Migrating user ${userId} from 'User' to 'users' collection`);
-        const usersRef = doc(db, COLLECTIONS.USERS, userId);
-        // Ensure cardNumber is included in migration
         const migratedData = {
           ...existingUser.data,
-          cardNumber: existingUser.data.cardNumber || '0000 0000 0000'
+          cardNumber: existingUser.data.cardNumber || '0000 0000 0000',
+          role: existingUser.data.role || 'commuter',
+          isActive: existingUser.data.isActive !== false
         };
-        await setDoc(usersRef, migratedData);
+        await setDoc(usersRef, { ...migratedData, updatedAt: serverTimestamp() });
         return migratedData;
       }
       return existingUser.data;
     } else {
       // Create new user document in 'users' collection
       const userRef = doc(db, COLLECTIONS.USERS, userId);
+      const role = ['admin', 'driver', 'commuter'].includes(userData.role) ? userData.role : 'commuter';
       const defaultUserData = {
         email: userData.email || '',
         firstName: userData.firstName || '',
@@ -115,7 +159,9 @@ export const createOrGetUser = async (userId, userData = {}) => {
         currentRoute: null,
         language: 'English',
         theme: 'light',
-        status: null, // 'waiting', 'onboarded', or null
+        status: null,
+        role,
+        isActive: true,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp()
       };
@@ -399,6 +445,45 @@ export const getUserTransactions = async (userId, limitCount = 50) => {
 };
 
 /**
+ * Subscribe to user transactions in real time
+ * @param {string} userId - Firebase Auth UID
+ * @param {function} callback - Called with transactions array on each update
+ * @param {number} limitCount - Maximum number of transactions to retrieve
+ * @returns {function} Unsubscribe function
+ */
+export const subscribeUserTransactions = (userId, callback, limitCount = 50) => {
+  const transactionsRef = collection(db, COLLECTIONS.TRANSACTIONS);
+  const q = query(
+    transactionsRef,
+    where('userId', '==', userId),
+    orderBy('timestamp', 'desc'),
+    limit(limitCount)
+  );
+
+  return onSnapshot(q, (snapshot) => {
+    const transactions = [];
+    snapshot.forEach((docSnap) => {
+      const data = docSnap.data();
+      transactions.push({
+        id: docSnap.id,
+        ...data,
+        timestamp: data.timestamp?.toDate?.() || new Date(),
+        createdAt: data.createdAt?.toDate?.() || new Date()
+      });
+    });
+    callback(transactions);
+  }, (error) => {
+    if (error.code === 'failed-precondition' && error.message?.includes('index')) {
+      console.warn('⚠️ Firestore index not created yet. transactions will be empty.');
+      callback([]);
+    } else {
+      console.error('Error subscribing to transactions:', error);
+      callback([]);
+    }
+  });
+};
+
+/**
  * Verification Code Functions (for 2FA)
  */
 
@@ -513,7 +598,7 @@ export const initializeJeepney = async (jeepneyId = 'jeep1') => {
     const jeepneySnap = await getDoc(jeepneyRef);
     
     if (!jeepneySnap.exists()) {
-      // Create default jeepney (only Jeep 1 is active)
+      // Create default jeepney (inactive until driver starts shift)
       const defaultJeepney = {
         id: jeepneyId,
         name: 'Jeep 1',
@@ -522,7 +607,7 @@ export const initializeJeepney = async (jeepneyId = 'jeep1') => {
         direction: 'right',
         fromTerminal: 1,
         toTerminal: 2,
-        isActive: true,
+        isActive: false,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp()
       };

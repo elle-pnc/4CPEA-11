@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { MdPerson, MdCheckCircle, MdSchedule, MdDirectionsBus, MdSwapHoriz, MdEdit } from 'react-icons/md'
 import { getUsersByStatus, updateUserStatus, updateUserBalance, addTransaction, updateUserRoute, getJeepney, updateJeepney, updateJeepneySeatCount, updateJeepneyRoute, initializeJeepney } from '../firebase/firestore'
+import { subscribeToTaps, processTap, RP4_DEVICE_ID } from '../firebase/rp4Taps'
 import { getTranslations } from '../translations'
 import { calculateFare } from '../utils/fareCalculator'
 import { doc, onSnapshot } from 'firebase/firestore'
@@ -21,6 +22,7 @@ const DriverSimulationPage = () => {
   const [showRouteModal, setShowRouteModal] = useState(false)
   const [selectedFromTerminal, setSelectedFromTerminal] = useState(1)
   const [selectedToTerminal, setSelectedToTerminal] = useState(2)
+  const [lastRp4Tap, setLastRp4Tap] = useState(null) // last RP4 card tap result for UI feedback
   const currentLanguage = 'English' // Driver view can be in English
   const t = getTranslations(currentLanguage)
 
@@ -82,6 +84,16 @@ const DriverSimulationPage = () => {
     
     loadJeepney()
   }, [])
+
+  // RP4: listen for card taps and process tap-in / tap-out automatically
+  useEffect(() => {
+    const unsubscribe = subscribeToTaps(RP4_DEVICE_ID, async (tapDocId, tapData) => {
+      const result = await processTap(tapDocId, tapData, jeepney)
+      setLastRp4Tap({ tapDocId, ...tapData, result, at: new Date().toISOString() })
+      await loadUsers()
+    })
+    return () => unsubscribe()
+  }, [jeepney])
 
   useEffect(() => {
     loadUsers()
@@ -523,6 +535,14 @@ const DriverSimulationPage = () => {
           <p className="footer-note">
             💡 This page auto-refreshes every 5 seconds. Click Refresh for immediate update.
           </p>
+          <p className="footer-note rp4-note">
+            📡 RP4 card reader: tap-in/tap-out is processed automatically. Result is written to <code>lastTap</code> for the device.
+          </p>
+          {lastRp4Tap && (
+            <p className="footer-note last-tap-note">
+              Last card tap: {lastRp4Tap.result?.active ? '✓' : '✗'} {lastRp4Tap.result?.reason} — {lastRp4Tap.result?.name || lastRp4Tap.uid}
+            </p>
+          )}
         </div>
       </div>
     </div>

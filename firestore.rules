@@ -1,0 +1,137 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isActiveUser() {
+      return isAuthenticated()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isActive != false);
+    }
+
+    function getUserRole() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role;
+    }
+
+    function isCommuter() {
+      return isActiveUser() && getUserRole() == "commuter";
+    }
+
+    function isDriver() {
+      return isActiveUser() && getUserRole() == "driver";
+    }
+
+    function isAdmin() {
+      return isActiveUser() && getUserRole() == "admin";
+    }
+
+    // Legacy: users without role set get driver access (migration fallback)
+    function hasDriverAccess() {
+      return isDriver() || (isActiveUser() && getUserRole() == null);
+    }
+
+    match /users/{userId} {
+      allow read: if isOwner(userId) || hasDriverAccess() || isAdmin();
+
+      allow create: if isAuthenticated() && request.auth.uid == userId;
+
+      // User updates own; driver updates commuter docs (tap in/out); admin updates all
+      allow update: if isOwner(userId)
+        || (hasDriverAccess() && resource.data.role == "commuter")
+        || isAdmin();
+
+      allow delete: if isOwner(userId) || isAdmin();
+
+      match /trustedDevices/{deviceToken} {
+        allow read, write: if isOwner(userId);
+      }
+    }
+
+    match /User/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+      allow write: if false;
+    }
+
+    match /transactions/{transactionId} {
+      allow read: if isAdmin()
+        || hasDriverAccess()
+        || (isCommuter() && resource.data.userId == request.auth.uid);
+
+      allow create: if isAdmin()
+        || hasDriverAccess()
+        || (isCommuter() && request.resource.data.userId == request.auth.uid);
+
+      allow update, delete: if isAdmin()
+        || hasDriverAccess()
+        || (isCommuter() && resource.data.userId == request.auth.uid);
+    }
+
+    match /verificationCodes/{email} {
+      allow read, write: if true;
+    }
+
+    match /jeepneys/{jeepneyId} {
+      allow read: if isActiveUser();
+      allow create, update: if isDriver() || isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    match /driverShifts/{shiftId} {
+      allow read: if isAdmin()
+        || (isDriver() && resource.data.userId == request.auth.uid);
+
+      allow create: if isAdmin()
+        || (isDriver() && request.resource.data.userId == request.auth.uid);
+
+      allow update: if isAdmin()
+        || (isDriver() && resource.data.userId == request.auth.uid);
+
+      allow delete: if isAdmin();
+    }
+
+    match /driverExpenses/{expenseId} {
+      allow read: if isAdmin() || hasDriverAccess();
+
+      allow create: if isAdmin()
+        || (hasDriverAccess() && request.resource.data.userId == request.auth.uid);
+
+      allow update: if isAdmin()
+        || (hasDriverAccess() && resource.data.userId == request.auth.uid);
+
+      allow delete: if isAdmin();
+    }
+
+    match /rp4_debug/{deviceId} {
+      allow read: if isActiveUser();
+      allow write: if hasDriverAccess() || isAdmin();
+
+      match /taps/{tapId} {
+        allow read: if isAdmin()
+          || hasDriverAccess()
+          || (isCommuter() && resource.data.userId == request.auth.uid);
+        allow write: if hasDriverAccess() || isAdmin();
+      }
+
+      match /seatEvents/{eventId} {
+        allow read: if isActiveUser();
+        allow write: if hasDriverAccess() || isAdmin();
+      }
+
+      match /gps_calibration/{cityId} {
+        allow read, write: if hasDriverAccess() || isAdmin();
+      }
+
+      match /gps/{docId} {
+        allow read: if isActiveUser();
+        allow write: if hasDriverAccess() || isAdmin();
+      }
+    }
+  }
+}

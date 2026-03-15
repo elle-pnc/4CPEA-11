@@ -10,7 +10,7 @@ import HistoryPage from './pages/HistoryPage'
 import SettingsPage from './pages/SettingsPage'
 import DriverSimulationPage from './pages/DriverSimulationPage'
 import { onAuthStateChange, logOut } from './firebase/auth'
-import { getUserTransactions } from './firebase/firestore'
+import { getUserTransactions, getUserRole, subscribeUser, subscribeUserTransactions } from './firebase/firestore'
 import { TranslationProvider } from './contexts/TranslationContext'
 import './App.css'
 
@@ -27,6 +27,7 @@ function App() {
     return prefersDark ? 'dark' : 'light'
   }
   
+  const [accessDeniedMessage, setAccessDeniedMessage] = useState(null)
   const [userData, setUserData] = useState({ 
     currentTerminal: 1, 
     balance: 250.00, 
@@ -43,7 +44,7 @@ function App() {
   
   // Listen to Firebase Auth state changes
   useEffect(() => {
-    const unsubscribe = onAuthStateChange((authUser) => {
+    const unsubscribe = onAuthStateChange(async (authUser) => {
       // Check if we're in the middle of a 2FA flow
       // If so, don't authenticate the user yet - they need to complete 2FA first
       const pendingVerification = sessionStorage.getItem('pendingVerificationEmail')
@@ -60,6 +61,18 @@ function App() {
       setLoading(true)
       
       if (authUser && authUser.user) {
+        const role = authUser.userData?.role ?? (await getUserRole(authUser.user.uid))
+        if (role === 'driver') {
+          sessionStorage.removeItem('pendingVerificationEmail')
+          sessionStorage.removeItem('pendingVerificationPassword')
+          setAccessDeniedMessage('Your account does not have access to the Commuter app.')
+          await logOut()
+          setCurrentUser(null)
+          setIsAuthenticated(false)
+          setLoading(false)
+          return
+        }
+        setAccessDeniedMessage(null)
         // User is authenticated (and 2FA is complete)
         setCurrentUser(authUser.user)
         setIsAuthenticated(true)
@@ -142,6 +155,41 @@ function App() {
     }
   }, [])
   
+  // Real-time Firestore listeners: keep userData in sync when Firebase changes
+  useEffect(() => {
+    if (!currentUser?.uid || !isAuthenticated) return
+
+    const unsubUser = subscribeUser(currentUser.uid, (userDoc) => {
+      if (!userDoc) return
+      setUserData(prev => {
+        const updated = {
+          ...prev,
+          ...userDoc,
+          balance: userDoc.balance !== undefined ? userDoc.balance : prev.balance,
+          currentTerminal: userDoc.currentTerminal ?? prev.currentTerminal,
+          currentRoute: userDoc.currentRoute ?? prev.currentRoute,
+          status: userDoc.status ?? prev.status,
+          firstName: userDoc.firstName ?? prev.firstName,
+          lastName: userDoc.lastName ?? prev.lastName,
+          email: userDoc.email ?? prev.email,
+          cardNumber: userDoc.cardNumber ?? prev.cardNumber,
+          language: userDoc.language ?? prev.language,
+          theme: userDoc.theme ?? prev.theme
+        }
+        return updated
+      })
+    })
+
+    const unsubTransactions = subscribeUserTransactions(currentUser.uid, (transactions) => {
+      setUserData(prev => ({ ...prev, transactions: transactions || [] }))
+    })
+
+    return () => {
+      unsubUser()
+      unsubTransactions()
+    }
+  }, [currentUser?.uid, isAuthenticated])
+
   // Apply theme to document root when theme changes
   useEffect(() => {
     const theme = userData?.theme || 'light'
@@ -208,14 +256,18 @@ function App() {
 
   return (
     <TranslationProvider language={userData?.language || 'English'}>
-      <Router future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      <Router basename="/Commuter" future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <div className="app">
           <Routes>
             <Route 
               path="/login" 
               element={
                 !isAuthenticated ? (
-                  <LoginPage currentUser={currentUser} />
+                  <LoginPage
+                    currentUser={currentUser}
+                    accessDeniedMessage={accessDeniedMessage}
+                    onClearAccessDenied={() => setAccessDeniedMessage(null)}
+                  />
                 ) : (
                   <Navigate to="/dashboard" replace />
                 )

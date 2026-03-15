@@ -11,13 +11,18 @@ import {
   addTransaction, 
   updateUserTerminal, 
   updateUserRoute,
+  updateUserStatus,
   getUserTransactions,
   getJeepneys,
-  initializeJeepney
+  initializeJeepney,
+  getUser
 } from '../firebase/firestore'
+import { subscribeToLastTapForUser, subscribeToSeatEventsForUser, RP4_DEVICE_ID } from '../firebase/rp4Taps'
 import { doc, onSnapshot, collection } from 'firebase/firestore'
 import { db } from '../firebase/config'
 import './CommuterDashboard.css'
+
+const BASE = import.meta.env.BASE_URL || '/'
 
 const CommuterDashboard = ({ currentUser, userData, setUserData, onLogout }) => {
   const navigate = useNavigate()
@@ -25,8 +30,9 @@ const CommuterDashboard = ({ currentUser, userData, setUserData, onLogout }) => 
   // Use refs to track previous values for comparison
   const prevStatusRef = useRef(null)
   const prevRouteRef = useRef(null)
+  const lastTapOutSuccessAtRef = useRef(0)
   
-  // Real-time listener for user data updates (status, balance, etc.)
+  // Real-time listener for user data updates (status, balance, seat count reflected via Firestore)
   useEffect(() => {
     if (!currentUser || !currentUser.uid) return
 
@@ -36,19 +42,25 @@ const CommuterDashboard = ({ currentUser, userData, setUserData, onLogout }) => 
         const updatedData = docSnap.data()
         const newStatus = updatedData.status || null
         const newRoute = updatedData.currentRoute || null
-        
-        // Detect tap-in: status changed from 'waiting' to 'onboarded'
-        if (prevStatusRef.current === 'waiting' && newStatus === 'onboarded') {
-          setShowTapInNotification(true)
-          // Auto-dismiss after 5 seconds
-          setTimeout(() => {
-            setShowTapInNotification(false)
-          }, 5000)
+
+        // Initialize refs from first snapshot so we can detect waiting → onboarded transition
+        if (prevStatusRef.current === null && newStatus !== undefined) {
+          prevStatusRef.current = newStatus
+        }
+        if (prevRouteRef.current === null && newRoute !== undefined) {
+          prevRouteRef.current = newRoute
         }
         
-        // Detect tap-out: status changed from 'onboarded' to null AND route was cleared
+        // Detect tap-in: status changed from 'waiting' to 'onboarded' (RP4 or driver tap-in)
+        if (prevStatusRef.current === 'waiting' && newStatus === 'onboarded') {
+          setShowTapInNotification(true)
+          setTimeout(() => setShowTapInNotification(false), 5000)
+        }
+        
+        // Detect tap-out (fallback for directTapOut when no seat event): status changed from 'onboarded' to null AND route was cleared
+        // Primary tap-out detection is via seatEvents (ir_available) - skip if we already showed from seatEvents
         if (prevStatusRef.current === 'onboarded' && newStatus === null && newRoute === null && prevRouteRef.current) {
-          // Store the route that was just cleared
+          if (Date.now() - lastTapOutSuccessAtRef.current < 2000) return // Already showed from seatEvents
           setCompletedTripRoute({
             from: prevRouteRef.current.from,
             to: prevRouteRef.current.to
@@ -56,14 +68,17 @@ const CommuterDashboard = ({ currentUser, userData, setUserData, onLogout }) => 
           setShowSuccessModal(true)
         }
         
-        // Update refs with new values
         prevStatusRef.current = newStatus
         prevRouteRef.current = newRoute
         
+        // Merge snapshot so status/balance/route always reflect Firestore (fixes RP4 tap-in not showing)
         setUserData(prev => ({
           ...prev,
           ...updatedData,
-          id: docSnap.id
+          id: docSnap.id,
+          status: newStatus,
+          balance: updatedData.balance !== undefined ? updatedData.balance : prev.balance,
+          currentRoute: newRoute !== undefined ? newRoute : prev.currentRoute
         }))
       }
     }, (error) => {
@@ -72,8 +87,48 @@ const CommuterDashboard = ({ currentUser, userData, setUserData, onLogout }) => 
 
     return () => unsubscribe()
   }, [currentUser?.uid])
+
+  // Seat events (firmware): listen to ir_available for tap-out - path: rp4_debug/cpe11-afcs/seatEvents
+  useEffect(() => {
+    if (!currentUser?.uid) return
+    const unsubscribe = subscribeToSeatEventsForUser(RP4_DEVICE_ID, currentUser.uid, () => {
+      lastTapOutSuccessAtRef.current = Date.now()
+      const route = prevRouteRef.current
+      if (route) {
+        setCompletedTripRoute({ from: route.from, to: route.to })
+        setShowSuccessModal(true)
+      }
+    })
+    return () => unsubscribe()
+  }, [currentUser?.uid])
+
+  // RP4: when this user's card is tapped in on the reader, refetch user doc and show success (ensures UI shows onboarded)
+  useEffect(() => {
+    if (!currentUser?.uid || !setUserData) return
+    const unsubscribe = subscribeToLastTapForUser(RP4_DEVICE_ID, currentUser.uid, async () => {
+      setShowTapInNotification(true)
+      setTimeout(() => setShowTapInNotification(false), 5000)
+      // Refetch user doc so status/balance/route are guaranteed in sync (fixes listener not firing or stale cache)
+      try {
+        const fresh = await getUser(currentUser.uid)
+        if (fresh) {
+          setUserData(prev => ({
+            ...prev,
+            ...fresh,
+            id: currentUser.uid,
+            status: fresh.status ?? prev.status,
+            balance: fresh.balance ?? prev.balance,
+            currentRoute: fresh.currentRoute ?? prev.currentRoute
+          }))
+        }
+      } catch (e) {
+        console.error('Refetch user after tap-in:', e)
+      }
+    })
+    return () => unsubscribe()
+  }, [currentUser?.uid])
   
-  // Initialize refs when userData changes (for initial load)
+  // Initialize refs when userData changes (for initial load before first snapshot)
   useEffect(() => {
     if (userData?.status !== undefined && prevStatusRef.current === null) {
       prevStatusRef.current = userData.status || null
@@ -101,7 +156,7 @@ const CommuterDashboard = ({ currentUser, userData, setUserData, onLogout }) => 
           // Ensure we have all 4 jeepneys (add inactive ones if missing)
           const jeepneyIds = jeepneysList.map(j => j.id)
           const defaultJeepneys = [
-            { id: 'jeep1', name: 'Jeep 1', seatCount: 0, maxSeats: 2, direction: 'right', fromTerminal: 1, toTerminal: 2, isActive: true },
+            { id: 'jeep1', name: 'Jeep 1', seatCount: 0, maxSeats: 2, direction: 'right', fromTerminal: 1, toTerminal: 2, isActive: false },
             { id: 'jeep2', name: 'Jeep 2', seatCount: 0, maxSeats: 2, direction: 'left', fromTerminal: 2, toTerminal: 1, isActive: false },
             { id: 'jeep3', name: 'Jeep 3', seatCount: 0, maxSeats: 2, direction: 'left', fromTerminal: 2, toTerminal: 1, isActive: false },
             { id: 'jeep4', name: 'Jeep 4', seatCount: 0, maxSeats: 2, direction: 'right', fromTerminal: 1, toTerminal: 2, isActive: false },
@@ -148,14 +203,16 @@ const CommuterDashboard = ({ currentUser, userData, setUserData, onLogout }) => 
   const [showSuccessModal, setShowSuccessModal] = useState(false)
   const [completedTripRoute, setCompletedTripRoute] = useState(null)
   const [showTapInNotification, setShowTapInNotification] = useState(false)
+  const [isCancelingBooking, setIsCancelingBooking] = useState(false)
   const [jeepneys, setJeepneys] = useState([
-    { id: 'jeep1', name: 'Jeep 1', seatCount: 0, maxSeats: 2, direction: 'right', fromTerminal: 1, toTerminal: 2, isActive: true },
+    { id: 'jeep1', name: 'Jeep 1', seatCount: 0, maxSeats: 2, direction: 'right', fromTerminal: 1, toTerminal: 2, isActive: false },
     { id: 'jeep2', name: 'Jeep 2', seatCount: 0, maxSeats: 2, direction: 'left', fromTerminal: 2, toTerminal: 1, isActive: false },
     { id: 'jeep3', name: 'Jeep 3', seatCount: 0, maxSeats: 2, direction: 'left', fromTerminal: 2, toTerminal: 1, isActive: false },
     { id: 'jeep4', name: 'Jeep 4', seatCount: 0, maxSeats: 2, direction: 'right', fromTerminal: 1, toTerminal: 2, isActive: false },
   ])
 
   const currentTerminal = userData?.currentTerminal || 1
+  const [liveTerminal, setLiveTerminal] = useState('unknown')
   const balance = userData?.balance || 250.00
   const currentRoute = userData?.currentRoute || null // { from: 1, to: 2 }
   const userStatus = userData?.status || null // 'waiting', 'onboarded', or null
@@ -165,11 +222,7 @@ const CommuterDashboard = ({ currentUser, userData, setUserData, onLogout }) => 
   const getDirectionArrows = (jeepney) => {
     const fromTerminal = jeepney.fromTerminal || jeepney.fromTerminal
     const toTerminal = jeepney.toTerminal || jeepney.toTerminal
-    if (jeepney.direction === 'right') {
-      return `${fromTerminal} ►►► ${toTerminal}`
-    } else {
-      return `${fromTerminal} ◄◄◄ ${toTerminal}`
-    }
+    return `${fromTerminal} ►►► ${toTerminal}`
   }
 
   const getPassengerColor = (seatCount, maxSeats) => {
@@ -279,6 +332,28 @@ const CommuterDashboard = ({ currentUser, userData, setUserData, onLogout }) => 
     // Change route - navigate to destination page with 'choose' mode
     saveScrollPosition()
     navigate('/choose-destination', { state: { mode: 'choose', changeRoute: true } })
+  }
+
+  const handleCancelBooking = async () => {
+    if (!currentUser?.uid || !currentRoute || isCancelingBooking) return
+    setIsCancelingBooking(true)
+    try {
+      await updateUserRoute(currentUser.uid, null)
+      await updateUserStatus(currentUser.uid, null)
+      // Brief delay so loading state is visible and transition feels smooth
+      await new Promise(resolve => setTimeout(resolve, 400))
+      setUserData({
+        ...userData,
+        currentRoute: null,
+        status: null
+      })
+    } catch (error) {
+      console.error('Error canceling booking:', error)
+      setErrorMessage('Failed to cancel booking. Please try again.')
+      setShowErrorModal(true)
+    } finally {
+      setIsCancelingBooking(false)
+    }
   }
 
   const handleSelectOrigin = () => {
@@ -411,20 +486,20 @@ const CommuterDashboard = ({ currentUser, userData, setUserData, onLogout }) => 
   // Using provided SVG files for icons
   const paymentMethods = {
     eWallets: [
-      { id: 'gcash', name: 'GCash', iconPath: '/Gcash.svg', color: '#0070BA' },
-      { id: 'maya', name: 'Maya', iconPath: '/Maya.svg', color: '#00A859' },
+      { id: 'gcash', name: 'GCash', iconPath: BASE + 'Gcash.svg', color: '#0070BA' },
+      { id: 'maya', name: 'Maya', iconPath: BASE + 'Maya.svg', color: '#00A859' },
       { id: 'grabpay', name: 'GrabPay', icon: SiGrab, color: '#00B14F' }, // No SVG provided, keep react-icon
       { id: 'coinsph', name: 'Coins.ph', icon: FaCoins, color: '#F7931E' } // No SVG provided, keep react-icon
     ],
     banks: [
-      { id: 'bdo', name: 'BDO', iconPath: '/BDO.svg', color: '#E62129' },
-      { id: 'bpi', name: 'BPI', iconPath: '/BPI.svg', color: '#E51837' },
-      { id: 'metrobank', name: 'Metrobank', iconPath: '/Metrobank.svg', color: '#E1192E' },
-      { id: 'rcbc', name: 'RCBC', iconPath: '/RCBC.svg', color: '#EE3124' }
+      { id: 'bdo', name: 'BDO', iconPath: BASE + 'BDO.svg', color: '#E62129' },
+      { id: 'bpi', name: 'BPI', iconPath: BASE + 'BPI.svg', color: '#E51837' },
+      { id: 'metrobank', name: 'Metrobank', iconPath: BASE + 'Metrobank.svg', color: '#E1192E' },
+      { id: 'rcbc', name: 'RCBC', iconPath: BASE + 'RCBC.svg', color: '#EE3124' }
     ],
     cards: [
-      { id: 'visa', name: 'Visa', iconPath: '/Visa.svg', color: '#1434CB' },
-      { id: 'mastercard', name: 'Mastercard', iconPath: '/Mastercard.svg', color: '#EB001B' }
+      { id: 'visa', name: 'Visa', iconPath: BASE + 'Visa.svg', color: '#1434CB' },
+      { id: 'mastercard', name: 'Mastercard', iconPath: BASE + 'Mastercard.svg', color: '#EB001B' }
     ]
   }
   
@@ -468,13 +543,56 @@ const CommuterDashboard = ({ currentUser, userData, setUserData, onLogout }) => 
     return found ? found.color : '#1e88e5'
   }
 
+  // Driver's current terminal: manual vs GPS controlled by driver's preference
+  // Preference is stored in rp4_debug/cpe11-afcs/gps/manual.preferredSource:
+  // - 'gps'   -> always use GPS
+  // - 'manual' (default) -> manual overrides GPS
+  useEffect(() => {
+    const deviceId = 'cpe11-afcs'
+    let manualTerminal = null
+    let gpsTerminal = null
+    let preferredSource = 'manual'
+
+    const computeValue = () => {
+      if (preferredSource === 'gps') {
+        return gpsTerminal
+      }
+      return manualTerminal !== null ? manualTerminal : gpsTerminal
+    }
+
+    const notify = () => {
+      const value = computeValue()
+      if (value !== undefined && value !== null) setLiveTerminal(value)
+    }
+
+    const unsubManual = onSnapshot(doc(db, 'rp4_debug', deviceId, 'gps', 'manual'), (snap) => {
+      const data = snap.exists() ? snap.data() : {}
+      manualTerminal = data.currentTerminal !== undefined
+        ? data.currentTerminal
+        : null
+      preferredSource = typeof data.preferredSource === 'string' ? data.preferredSource : 'manual'
+      notify()
+    }, () => { manualTerminal = null; notify() })
+
+    const unsubGps = onSnapshot(doc(db, 'rp4_debug', deviceId, 'gps', 'current'), (snap) => {
+      gpsTerminal = snap.exists() && snap.data()?.currentTerminal !== undefined
+        ? snap.data().currentTerminal
+        : null
+      notify()
+    }, () => { gpsTerminal = null; notify() })
+
+    return () => {
+      unsubManual()
+      unsubGps()
+    }
+  }, [])
+
   return (
     <div className="mobile-container page-with-footer">
       <div className="dashboard-page">
         <div className="dashboard-header">
           <div className="logo-text">
-            <span className="logo-blue">CPE11-</span>
-            <span className="logo-green">AFCS</span>
+            <img src={`${BASE}Logo.png`} alt="CPE11-AFCS Logo" className="logo-image-inline" />
           </div>
         </div>
 
@@ -522,9 +640,15 @@ const CommuterDashboard = ({ currentUser, userData, setUserData, onLogout }) => 
                   key={jeepney.id} 
                   className={`jeepney-card ${isFull ? 'full' : ''} ${!isActive ? 'inactive' : ''}`}
                 >
+                  <div className="jeepney-terminal-badge">
+                    <span className="terminal-live-label">Current Terminal</span>
+                    <span className="terminal-live-value">
+                      {isActive ? (typeof liveTerminal === 'number' ? liveTerminal : (typeof liveTerminal === 'string' && /\d+/.test(liveTerminal) ? liveTerminal.match(/\d+/)[0] : liveTerminal)) : '—'}
+                    </span>
+                  </div>
                   <div className="jeepney-name">{jeepney.name}</div>
                   <div className="jeepney-middle-row">
-                    <img src="/AvailableModernJeepneysSymbol.png" alt="Jeepney" className="jeepney-icon" />
+                    <img src={`${BASE}AvailableModernJeepneysSymbol.png`} alt="Jeepney" className="jeepney-icon" />
                     <div className="passenger-count">
                       <MdPerson 
                         className="passenger-icon"
@@ -695,13 +819,29 @@ const CommuterDashboard = ({ currentUser, userData, setUserData, onLogout }) => 
               )}
               
               {currentRoute && userStatus === 'waiting' && (
-                <button 
-                  className="action-btn-modern secondary-modern"
-                  onClick={handleChangeRoute}
-                >
-                  <MdEdit className="btn-icon-modern" />
-                  <span className="btn-text-modern">Change Route</span>
-                </button>
+                <>
+                  <button 
+                    className="action-btn-modern secondary-modern"
+                    onClick={handleChangeRoute}
+                  >
+                    <MdEdit className="btn-icon-modern" />
+                    <span className="btn-text-modern">Change Route</span>
+                  </button>
+                  <button 
+                    className="action-btn-modern cancel-modern"
+                    onClick={handleCancelBooking}
+                    disabled={isCancelingBooking}
+                  >
+                    {isCancelingBooking ? (
+                      <>
+                        <span className="cancel-loading-spinner"></span>
+                        <span className="btn-text-modern">{t.canceling}</span>
+                      </>
+                    ) : (
+                      <span className="btn-text-modern">{t.cancel}</span>
+                    )}
+                  </button>
+                </>
               )}
               
               {currentRoute && userStatus === 'onboarded' && canExtendRoute() && (
@@ -730,7 +870,7 @@ const CommuterDashboard = ({ currentUser, userData, setUserData, onLogout }) => 
       </div>
       <FooterNav language={currentLanguage} />
 
-      {/* Tap In Notification Toast */}
+      {/* Tap In Notification Toast - shown when card is tapped on RP4 or driver taps in */}
       {showTapInNotification && (
         <div className="tap-in-notification">
           <div className="tap-in-notification-content">
@@ -738,6 +878,9 @@ const CommuterDashboard = ({ currentUser, userData, setUserData, onLogout }) => 
             <div className="tap-in-notification-text">
               <div className="tap-in-notification-title">{t.tappedIn || "You're tapped in!"}</div>
               <div className="tap-in-notification-message">{t.enjoyRide || "Enjoy your ride"}</div>
+              <div className="tap-in-notification-detail">
+                Fare deducted • Balance & seat updated • You're onboarded
+              </div>
             </div>
             <button 
               className="tap-in-notification-close"

@@ -1,0 +1,25 @@
+# SPA fallback for Hostinger - multi-app (Commuter, Admin, Driver)
+# Upload dist-combined contents to your Hostinger public_html
+# This file is copied as .htaccess during build
+
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteBase /
+
+  # Skip rewrite for existing files and directories
+  RewriteCond %{REQUEST_FILENAME} -f [OR]
+  RewriteCond %{REQUEST_FILENAME} -d
+  RewriteRule ^ - [L]
+
+  # Commuter app: /Commuter, /Commuter/, /Commuter/*
+  RewriteRule ^Commuter(/.*)?$ Commuter/index.html [L,QSA]
+
+  # Admin app: /Admin, /Admin/, /Admin/*
+  RewriteRule ^Admin(/.*)?$ Admin/index.html [L,QSA]
+
+  # Driver app: /Driver, /Driver/, /Driver/*
+  RewriteRule ^Driver(/.*)?$ Driver/index.html [L,QSA]
+
+  # Root landing page
+  RewriteRule ^$ index.html [L,QSA]
+</IfModule>

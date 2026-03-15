@@ -1,7 +1,9 @@
 import { useState, useRef, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { MdCheck } from 'react-icons/md'
-import { verifyCode, deleteVerificationCode, saveTrustedDevice } from '../firebase/firestore'
+import { signOut } from 'firebase/auth'
+import { auth } from '../firebase/config'
+import { verifyCode, deleteVerificationCode, saveTrustedDevice, getUserRole } from '../firebase/firestore'
 import { signIn } from '../firebase/auth'
 import { useTranslation } from '../contexts/TranslationContext'
 import './TwoStepVerificationPage.css'
@@ -121,6 +123,14 @@ const TwoStepVerificationPage = () => {
           
           // Now sign in - the auth state listener will handle the rest
           const authResult = await signIn(email, password)
+          const role = await getUserRole(authResult?.user?.uid)
+          if (role === 'driver') {
+            await signOut(auth)
+            sessionStorage.setItem('accessDeniedMessage', 'Your account does not have access to the Commuter app.')
+            setLoading(false)
+            navigate('/login')
+            return
+          }
           
           // Save trusted device if "remember device" was checked
           if (rememberDevice && authResult?.user?.uid) {
@@ -174,7 +184,7 @@ const TwoStepVerificationPage = () => {
       <div className="verification-page">
         <div className="verification-header">
           <div className="logo-placeholder-verify">
-            <img src="/Logo.png" alt="CPE11-AFCS Logo" className="logo-image" />
+            <img src={`${import.meta.env.BASE_URL || '/'}Logo.png`} alt="CPE11-AFCS Logo" className="logo-image" />
           </div>
         </div>
 

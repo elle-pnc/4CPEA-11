@@ -4,6 +4,7 @@ import { copyFileSync } from 'fs'
 import { join } from 'path'
 
 export default defineConfig({
+  base: '/Commuter/',
   plugins: [
     react(),
     // Plugin to copy additional files after build
@@ -51,7 +52,6 @@ export default defineConfig({
     assetsDir: 'assets',
     sourcemap: false,
     minify: 'esbuild',
-    base: '/', // Ensure base path is root
     rollupOptions: {
       output: {
         manualChunks: {

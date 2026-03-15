@@ -6,11 +6,13 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "build:all": "node scripts/build-all.js",
     "preview": "vite preview",
     "firebase": "./node_modules/.bin/firebase",
     "firebase:login": "npm run firebase login",
     "firebase:init": "npm run firebase init functions",
     "firebase:deploy": "./node_modules/.bin/firebase deploy --only functions",
+    "firebase:deploy:hosting": "npm run build:all && ./node_modules/.bin/firebase deploy --only hosting",
     "firebase:config:get": "npm run firebase functions:config:get",
     "firebase:config:set": "npm run firebase functions:config:set",
     "firebase:logs": "npm run firebase functions:log"

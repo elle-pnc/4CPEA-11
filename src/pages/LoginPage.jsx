@@ -1,15 +1,15 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { MdEmail, MdLock, MdVisibility, MdVisibilityOff, MdArrowForward } from 'react-icons/md'
 import { signInWithEmailAndPassword, signOut } from 'firebase/auth'
 import { auth, functions } from '../firebase/config'
 import { httpsCallable } from 'firebase/functions'
 import { useTranslation } from '../contexts/TranslationContext'
-import { checkTrustedDevice } from '../firebase/firestore'
+import { checkTrustedDevice, getUserRole } from '../firebase/firestore'
 import { signIn } from '../firebase/auth'
 import './LoginPage.css'
 
-const LoginPage = ({ currentUser }) => {
+const LoginPage = ({ currentUser, accessDeniedMessage, onClearAccessDenied }) => {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
@@ -18,9 +18,18 @@ const LoginPage = ({ currentUser }) => {
   const navigate = useNavigate()
   const t = useTranslation()
 
+  useEffect(() => {
+    const msg = sessionStorage.getItem('accessDeniedMessage')
+    if (msg) {
+      setError(msg)
+      sessionStorage.removeItem('accessDeniedMessage')
+    }
+  }, [])
+
   const handleSubmit = async (e) => {
     e.preventDefault()
     setError('')
+    onClearAccessDenied?.()
     setLoading(true)
 
     try {
@@ -47,6 +56,14 @@ const LoginPage = ({ currentUser }) => {
       try {
         const testCredential = await signInWithEmailAndPassword(auth, email, password)
         userId = testCredential.user.uid
+
+        const role = await getUserRole(userId)
+        if (role === 'driver') {
+          await signOut(auth)
+          setError('Your account does not have access to the Commuter app.')
+          setLoading(false)
+          return
+        }
         
         // Temporarily keep signed in to check device token (rules require authentication)
         // Check for device token using userId
@@ -210,13 +227,13 @@ const LoginPage = ({ currentUser }) => {
       <div className="login-page">
         <div className="login-header">
           <div className="logo-placeholder">
-            <img src="/Logo.png" alt="CPE11-AFCS Logo" className="logo-image" />
+            <img src={`${import.meta.env.BASE_URL || '/'}Logo.png`} alt="CPE11-AFCS Logo" className="logo-image" />
           </div>
         </div>
 
         <h1 className="login-title">{t.login}</h1>
 
-        {error && (
+        {(error || accessDeniedMessage) && (
           <div className="error-message" style={{
             backgroundColor: 'var(--accent-error)',
             color: '#ffffff',
@@ -225,7 +242,7 @@ const LoginPage = ({ currentUser }) => {
             marginBottom: '16px',
             fontSize: '14px'
           }}>
-            {error}
+            {error || accessDeniedMessage}
           </div>
         )}
 

@@ -172,6 +172,71 @@
       }
     }
 
+    // Manual control only. This page simulates RP4 tap-in/tap-out by writing to Firestore taps/seatEvents.
+
+    const RP4_COLLECTION = 'rp4_debug';
+    const RP4_DEVICE_ID = 'cpe11-afcs';
+    const USER_ID_TO_CARD_UID = {
+      '9ij7y7Az7hcES9qmjFAySjqMWeP2': '04151F02A51390',
+      'iJq7rGZsUcTZc6HeGAWcZUbHFWk1': '04196702A51390',
+      'uIsKhAzJECgPVcwJnDePCP1E7Ok1': '041E6502A51390',
+      'Vc1owqvklzOV3PqkO4f98MsOb773': '04295B02A51390',
+      '1WevZnMhS8da4Gtd0j2mrzNM50H2': '042B5D02A51390',
+      'X4EdHVyllXO4RJkLgexzujFbjuU2': '042B6C02A51390'
+    };
+
+    async function writeTapDoc(user) {
+      const uid = USER_ID_TO_CARD_UID[user.id] || '';
+      if (!uid) {
+        showError('No card UID mapped for this user.');
+        return null;
+      }
+      const tsMs = Date.now();
+      const tapDoc = {
+        uid,
+        deviceId: RP4_DEVICE_ID,
+        tsMs,
+        sentAt: new Date().toISOString(),
+        source: 'driver-sim',
+        known: true,
+        active: true,
+        name: `${user.firstName || ''} ${user.lastName || ''}`.trim() || user.email || 'Passenger',
+        reason: 'Simulated tap',
+        seatChosen: null,
+        gateAction: null,
+        currentTerminal: null,
+        gps: null
+      };
+      await setDoc(doc(db, RP4_COLLECTION, RP4_DEVICE_ID, 'taps', String(tsMs)), tapDoc);
+      return tapDoc;
+    }
+
+    // Write seat event in firmware format: rp4_debug/cpe11-afcs/seatEvents/{eventId}
+    // eventId format: {tsMs}_{seatId}_ir_available (matches firmware)
+    async function writeSeatEventDoc(userId) {
+      const deviceDoc = await getDoc(doc(db, RP4_COLLECTION, RP4_DEVICE_ID));
+      let seatId = 'seat1';
+      if (deviceDoc.exists()) {
+        const data = deviceDoc.data();
+        if (data.seat1?.occupantUserId === userId) seatId = 'seat1';
+        else if (data.seat2?.occupantUserId === userId) seatId = 'seat2';
+      }
+      const tsMs = Date.now();
+      const eventId = `${tsMs}_${seatId}_ir_available`;
+      const seatEvent = {
+        seatId,
+        event: 'ir_available',
+        status: 'available',
+        phase: 'idle',
+        uid: null,
+        tsMs,
+        createdAt: serverTimestamp(),
+        source: 'driver-sim'
+      };
+      await setDoc(doc(db, RP4_COLLECTION, RP4_DEVICE_ID, 'seatEvents', eventId), seatEvent);
+      return { ...seatEvent, seatId };
+    }
+
     // App State
     let waitingUsers = [];
     let onboardedUsers = [];
@@ -187,6 +252,8 @@
     const loadingEl = document.getElementById('loading-container');
     const contentEl = document.getElementById('content-container');
     const jeepneyInfoEl = document.getElementById('jeepney-info');
+    const currentTerminalEl = document.getElementById('jeepney-current-terminal');
+    const currentTerminalSelectEl = document.getElementById('current-terminal-select');
     const routeModalEl = document.getElementById('route-modal');
     const successModalEl = document.getElementById('success-modal');
     const errorModalEl = document.getElementById('error-modal');
@@ -305,46 +372,26 @@
       if (routeEl) routeEl.textContent = `Terminal ${jeepney.fromTerminal || 1} → Terminal ${jeepney.toTerminal || 2}`;
       if (directionEl) directionEl.textContent = (jeepney.direction === 'right' ? 'Forward' : 'Backward');
       if (seatsEl) {
-        seatsEl.textContent = `${jeepney.seatCount || 0}/${jeepney.maxSeats || 2}`;
-        seatsEl.className = `info-value ${(jeepney.seatCount || 0) >= (jeepney.maxSeats || 2) ? 'full' : ''}`;
+        const seatCount = Math.max(0, jeepney.seatCount || 0);
+        seatsEl.textContent = `${seatCount}/${jeepney.maxSeats || 2}`;
+        seatsEl.className = `info-value ${seatCount >= (jeepney.maxSeats || 2) ? 'full' : ''}`;
       }
     }
 
-    // Tap In Handler
+    // Tap In Handler (simulate RP4 tap)
     window.handleTapIn = async function(userId) {
       const user = [...waitingUsers, ...onboardedUsers].find(u => u.id === userId);
       if (!user) return;
 
       try {
-        const currentSeatCount = jeepney?.seatCount || 0;
-        const maxSeats = jeepney?.maxSeats || 2;
-        
-        if (currentSeatCount >= maxSeats) {
-          showError('Jeepney is full! Cannot tap in more passengers.');
-          return;
-        }
-        
-        const route = user.currentRoute || { from: user.currentTerminal || 1, to: user.currentTerminal || 1 };
-        const fare = calculateFare(route.from, route.to);
-        const newBalance = (user.balance || 250.00) - fare;
-
-        await updateUserBalance(user.id, -fare);
-        await updateUserStatus(user.id, 'onboarded');
-        await updateJeepneySeatCount('jeep1', currentSeatCount + 1);
-        await addTransaction(user.id, {
-          type: 'trip',
-          amount: -fare,
-          description: `Trip: Terminal ${route.from} → Terminal ${route.to}`,
-          route: route,
-          balanceAfter: newBalance
-        });
-
+        const tapDoc = await writeTapDoc(user);
+        if (!tapDoc) return;
         await loadUsers();
-        showSuccess('Tap In Successful', `${user.firstName} ${user.lastName} tapped in successfully. Fare ₱${fare.toFixed(2)} deducted.`, {
+        showSuccess('Tap In Simulated', `${user.firstName || ''} ${user.lastName || ''} tap-in event sent to RP4 taps.`, {
           type: 'tap-in',
-          userName: `${user.firstName} ${user.lastName}`,
-          fare: fare,
-          route: `Terminal ${route.from} → Terminal ${route.to}`
+          userName: `${user.firstName || ''} ${user.lastName || ''}`.trim(),
+          fare: 0,
+          route: 'Waiting for backend'
         });
       } catch (error) {
         console.error('Error processing tap in:', error);
@@ -352,37 +399,67 @@
       }
     };
 
-    // Tap Out Handler
+    // Tap Out Handler: always write seatEvents (firmware format) for consistency; Cloud Function processes it when user in seat
+    // If user not in seat, also run directTapOut so tap-out still works
     window.handleTapOut = async function(userId) {
       const user = [...waitingUsers, ...onboardedUsers].find(u => u.id === userId);
       if (!user) return;
 
       try {
-        const completedRoute = user.currentRoute || null;
-        const routeInfo = completedRoute 
-          ? `Terminal ${completedRoute.from} → Terminal ${completedRoute.to}`
-          : 'No route';
-
-        await updateUserStatus(user.id, null);
-        await updateUserRoute(user.id, null);
-
-        const currentSeatCount = jeepney?.seatCount || 0;
-        if (currentSeatCount > 0) {
-          await updateJeepneySeatCount('jeep1', currentSeatCount - 1);
+        const deviceDoc = await getDoc(doc(db, RP4_COLLECTION, RP4_DEVICE_ID));
+        const data = deviceDoc.exists() ? deviceDoc.data() : {};
+        const inSeat = data.seat1?.occupantUserId === userId || data.seat2?.occupantUserId === userId;
+        await writeSeatEventDoc(user.id);
+        if (!inSeat) {
+          await directTapOut(user.id);
         }
-
         await loadUsers();
-        showSuccess('Trip Completed!', `${user.firstName} ${user.lastName} tapped out successfully. Trip completed!`, {
+        const routeStr = user.currentRoute ? `Terminal ${user.currentRoute.from} → Terminal ${user.currentRoute.to}` : 'N/A';
+        showSuccess('Tap Out Simulated', `${user.firstName || ''} ${user.lastName || ''} tapped out successfully.`, {
           type: 'tap-out',
-          userName: `${user.firstName} ${user.lastName}`,
-          route: routeInfo,
-          routeDetails: completedRoute
+          userName: `${user.firstName || ''} ${user.lastName || ''}`.trim(),
+          route: routeStr,
+          routeDetails: routeStr
         });
       } catch (error) {
         console.error('Error processing tap out:', error);
         showError(`Failed to process tap out: ${error.message}`);
       }
     };
+
+    // Direct tap-out: update user, jeepney, and rp4_debug (works regardless of seat assignment)
+    async function directTapOut(userId) {
+      const deviceDoc = await getDoc(doc(db, RP4_COLLECTION, RP4_DEVICE_ID));
+      const data = deviceDoc.exists() ? deviceDoc.data() : {};
+      const inSeat1 = data.seat1?.occupantUserId === userId;
+      const inSeat2 = data.seat2?.occupantUserId === userId;
+      const seatToClear = inSeat1 ? 'seat1' : (inSeat2 ? 'seat2' : null);
+
+      await updateUserStatus(userId, null);
+      await updateUserRoute(userId, null);
+
+      const jeepneyRef = doc(db, 'jeepneys', 'jeep1');
+      const jeepneySnap = await getDoc(jeepneyRef);
+      if (jeepneySnap.exists()) {
+        const j = jeepneySnap.data();
+        const count = Math.max(0, j.seatCount || 0); // Never use negative
+        if (count > 0) {
+          const newCount = count - 1;
+          await updateDoc(jeepneyRef, {
+            seatCount: newCount,
+            updatedAt: serverTimestamp()
+          });
+        }
+      }
+
+      if (seatToClear) {
+        await updateDoc(doc(db, RP4_COLLECTION, RP4_DEVICE_ID), {
+          [seatToClear]: { occupantUid: null, occupantUserId: null, occupiedAt: null },
+          [`${seatToClear}UpdatedAt`]: serverTimestamp(),
+          updatedAt: serverTimestamp()
+        });
+      }
+    }
 
     // Show Success Modal
     function showSuccess(title, message, details = null) {
@@ -534,9 +611,17 @@
         
         // Set up real-time listener for jeepney
         const jeepneyRef = doc(db, 'jeepneys', 'jeep1');
-        onSnapshot(jeepneyRef, (docSnap) => {
+        onSnapshot(jeepneyRef, async (docSnap) => {
           if (docSnap.exists()) {
-            jeepney = { id: docSnap.id, ...docSnap.data() };
+            const data = docSnap.data();
+            jeepney = { id: docSnap.id, ...data };
+            // Repair: fix negative seat count
+            const count = data.seatCount ?? 0;
+            if (count < 0) {
+              try {
+                await updateDoc(jeepneyRef, { seatCount: 0, updatedAt: serverTimestamp() });
+              } catch (e) { console.warn('Could not repair seat count:', e); }
+            }
             updateJeepneyInfo();
             if (fromTerminalSelect) fromTerminalSelect.value = jeepney.fromTerminal || 1;
             if (toTerminalSelect) {
@@ -545,6 +630,46 @@
             }
           }
         });
+
+        // RP4 GPS calibration: live current terminal
+        const deviceId = 'cpe11-afcs';
+        const cityId = 'laguna_calamba_cabuyao_routeA';
+        const gpsRef = doc(db, 'rp4_debug', deviceId, 'gps_calibration', cityId);
+        onSnapshot(gpsRef, (docSnap) => {
+          if (!docSnap.exists()) return;
+          const data = docSnap.data();
+          if (currentTerminalEl) {
+            const terminalValue = data?.currentTerminal ?? 'unknown';
+            currentTerminalEl.textContent = typeof terminalValue === 'number'
+              ? `Terminal ${terminalValue}`
+              : terminalValue;
+            if (currentTerminalSelectEl) {
+              currentTerminalSelectEl.value = typeof terminalValue === 'number'
+                ? String(terminalValue)
+                : 'unknown';
+            }
+          }
+        }, (error) => {
+          console.error('Error listening to current terminal:', error);
+        });
+
+        // Allow manual update of current terminal
+        if (currentTerminalSelectEl) {
+          currentTerminalSelectEl.addEventListener('change', async (event) => {
+            const value = event.target.value;
+            const currentTerminal = value === 'unknown' ? 'unknown' : parseInt(value, 10);
+            try {
+              await setDoc(
+                doc(db, 'rp4_debug', deviceId, 'gps_calibration', cityId),
+                { currentTerminal, updatedAt: serverTimestamp() },
+                { merge: true }
+              );
+            } catch (error) {
+              console.error('Error updating current terminal:', error);
+              showError('Failed to update current terminal.');
+            }
+          });
+        }
 
         // Load users
         await loadUsers();
@@ -669,6 +794,17 @@
       font-weight: bold;
       color: var(--text-primary);
       margin: 0;
+    }
+
+    .driver-subtitle {
+      font-size: 12px;
+      color: var(--text-secondary);
+      margin: 4px 0 0 0;
+    }
+
+    .footer-note.manual-only-note {
+      margin-top: 8px;
+      color: var(--text-secondary);
     }
 
     .refresh-button {
@@ -971,6 +1107,30 @@
       padding: 12px;
       border-radius: 8px;
       margin: 0 -8px;
+    }
+
+    .current-terminal-control {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      gap: 6px;
+    }
+
+    .current-terminal-select {
+      padding: 6px 10px;
+      border-radius: 8px;
+      border: 1px solid var(--border-color);
+      background-color: var(--bg-primary);
+      color: var(--text-primary);
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    .current-terminal-select:focus {
+      outline: none;
+      border-color: var(--accent-primary);
+      box-shadow: 0 0 0 2px rgba(30, 136, 229, 0.15);
     }
 
     .info-label {
@@ -1430,7 +1590,10 @@
       <div class="driver-header">
         <div class="driver-title-section">
           <span class="driver-icon">🚌</span>
-          <h1 class="driver-title">Driver Simulation</h1>
+          <div>
+            <h1 class="driver-title">Driver Simulation</h1>
+            <p class="driver-subtitle">Manual control only · RP4 handles tap-in/tap-out</p>
+          </div>
         </div>
         <button id="refresh-btn" class="refresh-button">🔄 Refresh</button>
       </div>
@@ -1453,6 +1616,19 @@
                 <span class="info-label">Current Route:</span>
                 <span class="info-value" id="jeepney-route">Terminal 1 → Terminal 2</span>
               </div>
+            <div class="jeepney-info-item">
+              <span class="info-label">Current Terminal:</span>
+              <div class="current-terminal-control">
+                <span class="info-value" id="jeepney-current-terminal">Unknown</span>
+                <select id="current-terminal-select" class="current-terminal-select">
+                  <option value="unknown">Unknown</option>
+                  <option value="1">Terminal 1</option>
+                  <option value="2">Terminal 2</option>
+                  <option value="3">Terminal 3</option>
+                  <option value="4">Terminal 4</option>
+                </select>
+              </div>
+            </div>
               <div class="jeepney-info-item">
                 <span class="info-label">Direction:</span>
                 <span class="info-value" id="jeepney-direction">Forward</span>
@@ -1491,6 +1667,7 @@
 
         <div class="driver-footer">
           <p class="footer-note">💡 This page auto-refreshes every 5 seconds. Click Refresh for immediate update.</p>
+          <p class="footer-note manual-only-note">📋 <strong>Manual control only.</strong> Tap-in / tap-out is done via RP4 + card reader; the main app (React) processes those taps.</p>
         </div>
       </div>
     </div>

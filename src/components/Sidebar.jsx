@@ -26,7 +26,7 @@ const Sidebar = ({ isOpen, onClose, onLogout }) => {
       <div className={`sidebar ${isOpen ? 'open' : ''}`}>
         <div className="sidebar-header">
           <div className="sidebar-logo">
-            <img src="/Logo.png" alt="CPE11-AFCS Logo" className="sidebar-logo-image" />
+            <img src={`${import.meta.env.BASE_URL || '/'}Logo.png`} alt="CPE11-AFCS Logo" className="sidebar-logo-image" />
           </div>
           <div className="sidebar-divider"></div>
         </div>

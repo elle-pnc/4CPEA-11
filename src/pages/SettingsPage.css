@@ -23,6 +23,12 @@
   letter-spacing: -0.3px;
 }
 
+.logo-image-inline {
+  height: 24px;
+  width: auto;
+  display: block;
+}
+
 .logo-blue {
   color: var(--accent-primary);
 }

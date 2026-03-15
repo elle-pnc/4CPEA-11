@@ -93,8 +93,7 @@ const SettingsPage = ({ currentUser, userData, setUserData, onLogout }) => {
       <div className="settings-page">
         <div className="settings-header">
           <div className="logo-text">
-            <span className="logo-blue">CPE11-</span>
-            <span className="logo-green">AFCS</span>
+            <img src={`${import.meta.env.BASE_URL || '/'}Logo.png`} alt="CPE11-AFCS Logo" className="logo-image-inline" />
           </div>
         </div>
 

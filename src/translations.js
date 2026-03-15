@@ -2,6 +2,7 @@ export const translations = {
   en: {
     // Common
     cancel: 'Cancel',
+    canceling: 'Canceling...',
     confirm: 'Confirm',
     back: 'Back',
     save: 'Save',
@@ -61,6 +62,7 @@ export const translations = {
     selectOriginTerminal: 'Select Origin Terminal',
     currentOrigin: 'Current Origin',
     confirmSelection: 'Confirm Selection',
+    cancelBooking: 'Cancel Booking',
     warning: 'Warning',
     warningMessage: 'You have a terminal selected. Are you sure you want to go back? Your selection will be lost.',
     goBack: 'Go Back',
@@ -161,6 +163,7 @@ export const translations = {
   fil: {
     // Common
     cancel: 'Kanselahin',
+    canceling: 'Kinansela...',
     confirm: 'Kumpirmahin',
     back: 'Bumalik',
     save: 'I-save',
@@ -220,6 +223,7 @@ export const translations = {
     selectOriginTerminal: 'Pumili ng Origin Terminal',
     currentOrigin: 'Kasalukuyang Origin',
     confirmSelection: 'Kumpirmahin ang Pagpipilian',
+    cancelBooking: 'Kanselahin ang Booking',
     warning: 'Babala',
     warningMessage: 'May napiling terminal kayo. Sigurado ba kayong gusto ninyong bumalik? Mawawala ang inyong pagpipilian.',
     goBack: 'Bumalik',
@@ -319,6 +323,7 @@ export const translations = {
   es: {
     // Common
     cancel: 'Cancelar',
+    canceling: 'Cancelando...',
     confirm: 'Confirmar',
     back: 'Atrás',
     save: 'Guardar',
@@ -376,6 +381,7 @@ export const translations = {
     selectOriginTerminal: 'Seleccionar Terminal de Origen',
     currentOrigin: 'Origen Actual',
     confirmSelection: 'Confirmar Selección',
+    cancelBooking: 'Cancelar Reserva',
     warning: 'Advertencia',
     warningMessage: 'Tienes un terminal seleccionado. ¿Estás seguro de que quieres volver? Tu selección se perderá.',
     goBack: 'Volver',
@@ -475,6 +481,7 @@ export const translations = {
   zh: {
     // Common
     cancel: '取消',
+    canceling: '取消中...',
     confirm: '确认',
     back: '返回',
     save: '保存',
@@ -534,6 +541,7 @@ export const translations = {
     selectOriginTerminal: '选择起点终端',
     currentOrigin: '当前起点',
     confirmSelection: '确认选择',
+    cancelBooking: '取消预订',
     warning: '警告',
     warningMessage: '您已选择一个终端。确定要返回吗？您的选择将丢失。',
     goBack: '返回',
@@ -627,6 +635,7 @@ export const translations = {
   ja: {
     // Common
     cancel: 'キャンセル',
+    canceling: 'キャンセル中...',
     confirm: '確認',
     back: '戻る',
     save: '保存',
@@ -686,6 +695,7 @@ export const translations = {
     selectOriginTerminal: '出発地ターミナルを選択',
     currentOrigin: '現在の出発地',
     confirmSelection: '選択を確認',
+    cancelBooking: '予約をキャンセル',
     warning: '警告',
     warningMessage: 'ターミナルが選択されています。戻ってもよろしいですか？選択が失われます。',
     goBack: '戻る',
@@ -785,6 +795,7 @@ export const translations = {
   ko: {
     // Common
     cancel: '취소',
+    canceling: '취소 중...',
     confirm: '확인',
     back: '뒤로',
     save: '저장',
@@ -844,6 +855,7 @@ export const translations = {
     selectOriginTerminal: '출발지 터미널 선택',
     currentOrigin: '현재 출발지',
     confirmSelection: '선택 확인',
+    cancelBooking: '예약 취소',
     warning: '경고',
     warningMessage: '터미널이 선택되어 있습니다. 돌아가시겠습니까? 선택이 손실됩니다.',
     goBack: '돌아가기',

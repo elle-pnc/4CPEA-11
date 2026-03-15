@@ -25,7 +25,8 @@ export const signIn = async (email, password) => {
     
     // Get or create user document in Firestore
     const userData = await createOrGetUser(firebaseUser.uid, {
-      email: firebaseUser.email
+      email: firebaseUser.email,
+      role: 'commuter'
     });
 
     return {
@@ -60,11 +61,12 @@ export const signUp = async (email, password, profileData = {}) => {
       });
     }
 
-    // Create user document in Firestore
+    // Create user document in Firestore (self-signup = commuter)
     const userData = await createOrGetUser(firebaseUser.uid, {
       email: firebaseUser.email,
       firstName: profileData.firstName || '',
-      lastName: profileData.lastName || ''
+      lastName: profileData.lastName || '',
+      role: 'commuter'
     });
 
     return {

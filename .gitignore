@@ -10,6 +10,15 @@ node_modules
 /build
 /dist
 
+# Firebase
+.firebase/
+
+# Build output
+dist-combined/
+
+# Backups
+backup_*/
+
 # Misc
 .DS_Store
 .env.local

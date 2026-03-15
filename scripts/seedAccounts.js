@@ -45,7 +45,7 @@ if (!getApps().length) {
 const auth = getAuth();
 const db = getFirestore();
 
-// Test accounts to create
+// Test accounts to create (role: 'commuter' | 'driver' | 'admin')
 const testAccounts = [
   {
     email: 'test1@example.com',
@@ -55,7 +55,8 @@ const testAccounts = [
     balance: 500.00,
     currentTerminal: 1,
     language: 'English',
-    theme: 'light'
+    theme: 'light',
+    role: 'commuter'
   },
   {
     email: 'test2@example.com',
@@ -65,7 +66,8 @@ const testAccounts = [
     balance: 250.00,
     currentTerminal: 2,
     language: 'Filipino',
-    theme: 'dark'
+    theme: 'dark',
+    role: 'commuter'
   },
   {
     email: 'admin@example.com',
@@ -75,7 +77,8 @@ const testAccounts = [
     balance: 1000.00,
     currentTerminal: 1,
     language: 'English',
-    theme: 'light'
+    theme: 'light',
+    role: 'admin'
   }
 ];
 
@@ -95,6 +98,7 @@ async function createAccount(accountData) {
     console.log(`✓ Created Auth user: ${userRecord.uid} (${accountData.email})`);
 
     // 2. Create user document in Firestore
+    const role = ['admin', 'driver', 'commuter'].includes(accountData.role) ? accountData.role : 'commuter';
     const userRef = db.collection('users').doc(userRecord.uid);
     await userRef.set({
       email: accountData.email,
@@ -106,6 +110,8 @@ async function createAccount(accountData) {
       currentRoute: null,
       language: accountData.language,
       theme: accountData.theme,
+      role,
+      isActive: true,
       createdAt: new Date(),
       updatedAt: new Date()
     });
@@ -140,6 +146,7 @@ async function createAccount(accountData) {
       try {
         const existingUser = await auth.getUserByEmail(accountData.email);
         const userRef = db.collection('users').doc(existingUser.uid);
+        const role = ['admin', 'driver', 'commuter'].includes(accountData.role) ? accountData.role : 'commuter';
         await userRef.set({
           email: accountData.email,
           firstName: accountData.firstName,
@@ -150,6 +157,8 @@ async function createAccount(accountData) {
           currentRoute: null,
           language: accountData.language,
           theme: accountData.theme,
+          role,
+          isActive: true,
           updatedAt: new Date()
         }, { merge: true });
         console.log(`✓ Updated Firestore document for existing user: ${accountData.email}`);

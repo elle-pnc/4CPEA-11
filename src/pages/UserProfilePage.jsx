@@ -219,8 +219,7 @@ const UserProfilePage = ({ currentUser, userData, setUserData, onLogout }) => {
       <div className="profile-page">
         <div className="profile-header">
           <div className="logo-text">
-            <span className="logo-blue">CPE11-</span>
-            <span className="logo-green">AFCS</span>
+            <img src={`${import.meta.env.BASE_URL || '/'}Logo.png`} alt="CPE11-AFCS Logo" className="logo-image-inline" />
           </div>
         </div>
 

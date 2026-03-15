@@ -1,4 +1,30 @@
 {
+  "firestore": {
+    "rules": "firestore.rules",
+    "indexes": "firestore.indexes.json"
+  },
+  "hosting": {
+    "public": "dist-combined",
+    "ignore": [
+      "firebase.json",
+      "**/.*",
+      "**/node_modules/**"
+    ],
+    "rewrites": [
+      {
+        "regex": "/Commuter(/.*)?",
+        "destination": "/Commuter/index.html"
+      },
+      {
+        "regex": "/Admin(/.*)?",
+        "destination": "/Admin/index.html"
+      },
+      {
+        "regex": "/Driver(/.*)?",
+        "destination": "/Driver/index.html"
+      }
+    ]
+  },
   "functions": [
     {
       "codebase": "default",
