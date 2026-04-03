@@ -27,16 +27,24 @@ function Login({ accessDeniedMessage, onClearAccessDenied }) {
 
   const handleSubmit = (e) => {
     e.preventDefault()
+    // Set immediately so auth listener never redirects to dashboard during this flow
+    sessionStorage.setItem('pendingVerificationEmail', email)
+    sessionStorage.setItem('pendingVerificationPassword', password)
+
     setError('')
     onClearAccessDenied?.()
 
     if (!email || !password) {
+      sessionStorage.removeItem('pendingVerificationEmail')
+      sessionStorage.removeItem('pendingVerificationPassword')
       setError('Please enter both email and password.')
       return
     }
 
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
     if (!emailRegex.test(email)) {
+      sessionStorage.removeItem('pendingVerificationEmail')
+      sessionStorage.removeItem('pendingVerificationPassword')
       setError('Please enter a valid email address.')
       return
     }
@@ -51,6 +59,8 @@ function Login({ accessDeniedMessage, onClearAccessDenied }) {
 
         const role = await getUserRole(userId)
         if (role === 'commuter') {
+          sessionStorage.removeItem('pendingVerificationEmail')
+          sessionStorage.removeItem('pendingVerificationPassword')
           await signOut(auth)
           setError('Your account does not have access to the Driver app.')
           setLoading(false)
@@ -62,6 +72,8 @@ function Login({ accessDeniedMessage, onClearAccessDenied }) {
         if (deviceToken) {
           const trustedDevice = await checkTrustedDevice(userId, deviceToken)
           if (trustedDevice) {
+            sessionStorage.removeItem('pendingVerificationEmail')
+            sessionStorage.removeItem('pendingVerificationPassword')
             setLoading(false)
             navigate(ROUTES.DASHBOARD)
             return
@@ -72,15 +84,16 @@ function Login({ accessDeniedMessage, onClearAccessDenied }) {
         // Not a trusted device, sign out before 2FA
         await signOut(auth)
 
-        sessionStorage.setItem('pendingVerificationEmail', email)
-        sessionStorage.setItem('pendingVerificationPassword', password)
-
         // Call Cloud Function to send verification code
         const sendVerificationCode = httpsCallable(functions, 'sendVerificationCode')
         await sendVerificationCode({ email })
 
+        // Use full page navigation to avoid auth-listener / React Router race
+        sessionStorage.setItem('pendingVerificationEmail', email)
+        sessionStorage.setItem('pendingVerificationPassword', password)
         setLoading(false)
-        navigate(ROUTES.VERIFY, { replace: true })
+        const base = (import.meta.env.BASE_URL || '/Driver/').replace(/\/$/, '') || ''
+        window.location.href = base ? `${base}/verify` : '/verify'
       } catch (err) {
         sessionStorage.removeItem('pendingVerificationEmail')
         sessionStorage.removeItem('pendingVerificationPassword')
@@ -151,7 +164,7 @@ function Login({ accessDeniedMessage, onClearAccessDenied }) {
               className="toggle-password"
               aria-label={showPassword ? 'Hide password' : 'Show password'}
             >
-              {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+              {showPassword ? <Eye className="w-5 h-5" /> : <EyeOff className="w-5 h-5" />}
             </button>
           </div>
 

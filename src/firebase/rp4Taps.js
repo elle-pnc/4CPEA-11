@@ -307,6 +307,14 @@ export function subscribeToSeatEventsForUser(deviceId, userId, onTapOutSuccess) 
   if (!userId) return () => {}
   const seatEventsRef = getSeatEventsRef(deviceId)
   let hasInitialized = false
+  /** Avoid double callback when firmware adds multiple events or getDoc + getUser both match */
+  let lastTapOutNotifiedAt = 0
+  const notifyTapOutOnce = () => {
+    const now = Date.now()
+    if (now - lastTapOutNotifiedAt < 3500) return
+    lastTapOutNotifiedAt = now
+    onTapOutSuccess()
+  }
   return onSnapshot(seatEventsRef, (snapshot) => {
     if (!hasInitialized) {
       hasInitialized = true
@@ -324,12 +332,12 @@ export function subscribeToSeatEventsForUser(deviceId, userId, onTapOutSuccess) 
         const deviceData = deviceSnap.data()
         const seatData = deviceData[seatId]
         if (seatData?.occupantUserId === userId) {
-          onTapOutSuccess()
+          notifyTapOutOnce()
           return
         }
-        // Seat may be cleared (Cloud Function ran first); refetch user to confirm
+        // Seat may be cleared (Cloud Function ran first); refetch user to confirm tap-out
         getUser(userId).then((user) => {
-          if (user?.status === null) onTapOutSuccess()
+          if (user?.status === null) notifyTapOutOnce()
         }).catch(() => {})
       }).catch((err) => console.error('Seat event tap-out check error:', err))
     })

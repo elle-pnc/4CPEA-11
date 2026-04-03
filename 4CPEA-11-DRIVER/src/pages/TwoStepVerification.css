@@ -151,6 +151,40 @@
   accent-color: #2563EB;
 }
 
+.resend-container {
+  text-align: center;
+  margin-top: 0.5rem;
+}
+
+.resend-success {
+  font-size: 0.9rem;
+  color: #16a34a;
+  margin-bottom: 0.5rem;
+}
+
+.resend-button {
+  background: none;
+  border: none;
+  color: #2563EB;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0.5rem 0.75rem;
+  border-radius: 0.5rem;
+  transition: opacity 0.2s, background-color 0.2s;
+}
+
+.resend-button:hover:not(:disabled) {
+  text-decoration: underline;
+  background-color: rgba(37, 99, 235, 0.08);
+}
+
+.resend-button:disabled {
+  color: #94a3b8;
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
 @media (max-width: 480px) {
   .auth-card {
     padding: 1.5rem;

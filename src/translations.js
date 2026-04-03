@@ -26,6 +26,10 @@ export const translations = {
     twoStepVerification: 'Two-Step Verification',
     verificationSubtitle: 'Enter the verification code sent to your email/phone',
     verify: 'Verify',
+    resendCode: 'Resend code',
+    resendCodeSent: 'Code sent. Check your email.',
+    resendCodeWait: 'Resend in {{seconds}}s',
+    resendSending: 'Sending...',
     
     // Dashboard
     cardBalance: 'Card Balance',
@@ -187,6 +191,10 @@ export const translations = {
     twoStepVerification: 'Dalawang-Hakbang na Pag-verify',
     verificationSubtitle: 'Ilagay ang verification code na ipinadala sa inyong email/phone',
     verify: 'I-verify',
+    resendCode: 'Ipadala ulit ang code',
+    resendCodeSent: 'Naipadala ang code. Tingnan ang inyong email.',
+    resendCodeWait: 'Ipadala ulit sa {{seconds}}s',
+    resendSending: 'Ipinapadala...',
     
     // Dashboard
     cardBalance: 'Balanse ng Card',
@@ -345,7 +353,11 @@ export const translations = {
     twoStepVerification: 'Verificación de Dos Pasos',
     verificationSubtitle: 'Ingrese el código de verificación enviado a su correo/teléfono',
     verify: 'Verificar',
-    
+    resendCode: 'Reenviar código',
+    resendCodeSent: 'Código enviado. Revisa tu correo.',
+    resendCodeWait: 'Reenviar en {{seconds}}s',
+    resendSending: 'Enviando...',
+
     // Dashboard
     cardBalance: 'Saldo de la Tarjeta',
     cardNumber: 'Número de Tarjeta',
@@ -505,7 +517,11 @@ export const translations = {
     twoStepVerification: '两步验证',
     verificationSubtitle: '输入发送到您的电子邮件/电话的验证码',
     verify: '验证',
-    
+    resendCode: '重新发送验证码',
+    resendCodeSent: '验证码已发送。请查看您的电子邮件。',
+    resendCodeWait: '{{seconds}}秒后重新发送',
+    resendSending: '发送中...',
+
     // Dashboard
     cardBalance: '卡片余额',
     cardNumber: '卡片号码',
@@ -659,7 +675,11 @@ export const translations = {
     twoStepVerification: '二段階認証',
     verificationSubtitle: 'メール/電話に送信された確認コードを入力してください',
     verify: '確認',
-    
+    resendCode: 'コードを再送信',
+    resendCodeSent: 'コードを送信しました。メールをご確認ください。',
+    resendCodeWait: '{{seconds}}秒後に再送信',
+    resendSending: '送信中...',
+
     // Dashboard
     cardBalance: 'カード残高',
     cardNumber: 'カード番号',
@@ -819,7 +839,11 @@ export const translations = {
     twoStepVerification: '2단계 인증',
     verificationSubtitle: '이메일/전화로 전송된 인증 코드를 입력하세요',
     verify: '인증',
-    
+    resendCode: '코드 재전송',
+    resendCodeSent: '코드가 전송되었습니다. 이메일을 확인하세요.',
+    resendCodeWait: '{{seconds}}초 후 재전송',
+    resendSending: '전송 중...',
+
     // Dashboard
     cardBalance: '카드 잔액',
     cardNumber: '카드 번호',

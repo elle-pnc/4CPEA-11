@@ -365,7 +365,7 @@ const UserProfilePage = ({ currentUser, userData, setUserData, onLogout }) => {
                   onClick={() => setShowPassword(!showPassword)}
                   disabled={loading}
                 >
-                  {showPassword ? <MdVisibilityOff /> : <MdVisibility />}
+                  {showPassword ? <MdVisibility /> : <MdVisibilityOff />}
                 </button>
               </div>
               {passwordError && (

@@ -28,12 +28,18 @@ const LoginPage = ({ currentUser, accessDeniedMessage, onClearAccessDenied }) =>
 
   const handleSubmit = async (e) => {
     e.preventDefault()
+    // Set immediately so auth listener never redirects to dashboard during this flow
+    sessionStorage.setItem('pendingVerificationEmail', email)
+    sessionStorage.setItem('pendingVerificationPassword', password)
+
     setError('')
     onClearAccessDenied?.()
     setLoading(true)
 
     try {
       if (!email || !password) {
+        sessionStorage.removeItem('pendingVerificationEmail')
+        sessionStorage.removeItem('pendingVerificationPassword')
         setError('Please enter both email and password')
         setLoading(false)
         return
@@ -42,6 +48,8 @@ const LoginPage = ({ currentUser, accessDeniedMessage, onClearAccessDenied }) =>
       // Validate email format
       const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
       if (!emailRegex.test(email)) {
+        sessionStorage.removeItem('pendingVerificationEmail')
+        sessionStorage.removeItem('pendingVerificationPassword')
         setError('Please enter a valid email address')
         setLoading(false)
         return
@@ -59,6 +67,8 @@ const LoginPage = ({ currentUser, accessDeniedMessage, onClearAccessDenied }) =>
 
         const role = await getUserRole(userId)
         if (role === 'driver') {
+          sessionStorage.removeItem('pendingVerificationEmail')
+          sessionStorage.removeItem('pendingVerificationPassword')
           await signOut(auth)
           setError('Your account does not have access to the Commuter app.')
           setLoading(false)
@@ -76,7 +86,8 @@ const LoginPage = ({ currentUser, accessDeniedMessage, onClearAccessDenied }) =>
             
             if (trustedDevice) {
               // Trusted device found - skip 2FA and sign in directly
-              // User is already signed in from testCredential, just navigate
+              sessionStorage.removeItem('pendingVerificationEmail')
+              sessionStorage.removeItem('pendingVerificationPassword')
               setLoading(false)
               navigate('/dashboard')
               return
@@ -97,7 +108,9 @@ const LoginPage = ({ currentUser, accessDeniedMessage, onClearAccessDenied }) =>
           await signOut(auth)
         }
       } catch (err) {
-        // If validation fails, continue with normal 2FA flow
+        // If validation fails, clear sessionStorage and handle error
+        sessionStorage.removeItem('pendingVerificationEmail')
+        sessionStorage.removeItem('pendingVerificationPassword')
         console.log('Credentials invalid, proceeding with 2FA')
         // Make sure we're signed out
         try {
@@ -107,13 +120,12 @@ const LoginPage = ({ currentUser, accessDeniedMessage, onClearAccessDenied }) =>
         }
       }
 
-      // Verify credentials exist in Firebase Auth before proceeding to 2FA
-      // Store credentials for 2FA flow FIRST before signing in
-      // This ensures the verify route allows access even if auth state changes
-      sessionStorage.setItem('pendingVerificationEmail', email)
-      sessionStorage.setItem('pendingVerificationPassword', password)
-      
-      // Attempt to sign in to validate email and password
+      // sessionStorage already set above (or set again if first try failed)
+      if (!sessionStorage.getItem('pendingVerificationEmail')) {
+        sessionStorage.setItem('pendingVerificationEmail', email)
+        sessionStorage.setItem('pendingVerificationPassword', password)
+      }
+      // Attempt to sign in to validate email and password (for the second path when first try fails)
       try {
         const userCredential = await signInWithEmailAndPassword(auth, email, password)
         
@@ -130,42 +142,24 @@ const LoginPage = ({ currentUser, accessDeniedMessage, onClearAccessDenied }) =>
         try {
           const sendVerificationCode = httpsCallable(functions, 'sendVerificationCode')
           const result = await sendVerificationCode({ email })
-          
-          console.log('Cloud Function response:', result)
-          console.log('Response data:', result?.data)
-          
-          // httpsCallable wraps the response, so we check result.data
-          // Navigate to verify page if we got a response (email was likely sent)
-          // Even if response structure is unexpected, navigate since email is working
-          if (result && result.data) {
-            console.log('Verification code sent to email')
-          } else {
+
+          // httpsCallable wraps the response in result.data
+          if (!result?.data) {
             console.warn('Unexpected response format, but navigating anyway (email is working)')
           }
-          
+
           // Ensure sessionStorage is set before navigation
-          console.log('Setting sessionStorage before navigation')
           sessionStorage.setItem('pendingVerificationEmail', email)
           sessionStorage.setItem('pendingVerificationPassword', password)
-          
-          // Verify sessionStorage was set
-          console.log('SessionStorage pendingVerificationEmail:', sessionStorage.getItem('pendingVerificationEmail'))
-          
-          // Set loading to false first
+
           setLoading(false)
-          
-          // Navigate immediately - don't use setTimeout as it might be blocked
-          console.log('About to navigate to /verify')
-          console.log('Navigation function:', navigate)
-          
-          try {
-            navigate('/verify', { replace: true })
-            console.log('Navigate called successfully')
-          } catch (navError) {
-            console.error('Navigation error:', navError)
-            // Fallback: use window.location
-            window.location.href = '/verify'
-          }
+
+          // Use full page navigation to avoid auth-listener / React Router race.
+          // navigate() can race with auth state updates; window.location guarantees
+          // sessionStorage is present when the verify page loads.
+          const base = (import.meta.env.BASE_URL || '/Commuter/').replace(/\/$/, '') || ''
+          const verifyPath = base ? `${base}/verify` : '/verify'
+          window.location.href = verifyPath
           
         } catch (codeError) {
           console.error('Error sending verification code:', codeError)
@@ -186,9 +180,11 @@ const LoginPage = ({ currentUser, accessDeniedMessage, onClearAccessDenied }) =>
           
           // For other errors, if user confirmed email is being sent, still navigate
           // (sometimes errors happen after email is sent, or response is malformed)
-          console.warn('Error occurred but navigating to verify (email may have been sent)')
+          sessionStorage.setItem('pendingVerificationEmail', email)
+          sessionStorage.setItem('pendingVerificationPassword', password)
           setLoading(false)
-          navigate('/verify', { replace: true })
+          const base = (import.meta.env.BASE_URL || '/Commuter/').replace(/\/$/, '') || ''
+          window.location.href = base ? `${base}/verify` : '/verify'
         }
       } catch (authError) {
         // Handle Firebase Auth errors
@@ -283,7 +279,7 @@ const LoginPage = ({ currentUser, accessDeniedMessage, onClearAccessDenied }) =>
               className="password-toggle"
               disabled={loading}
             >
-              {showPassword ? <MdVisibilityOff /> : <MdVisibility />}
+              {showPassword ? <MdVisibility /> : <MdVisibilityOff />}
             </button>
           </div>
 

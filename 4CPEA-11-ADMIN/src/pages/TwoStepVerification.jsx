@@ -1,18 +1,24 @@
 import { useState, useRef, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { ArrowLeft, Check } from 'lucide-react'
+import { httpsCallable } from 'firebase/functions'
 import { ROUTES } from '../constants'
 import Logo from '../components/Logo'
 import { signOut } from 'firebase/auth'
-import { auth } from '../firebase/config'
+import { auth, functions } from '../firebase/config'
 import { verifyCode, deleteVerificationCode, saveTrustedDevice, getUserRole } from '../firebase/firestore'
 import { signIn } from '../firebase/auth'
 import './TwoStepVerification.css'
+
+const RESEND_COOLDOWN_SECONDS = 60
 
 function TwoStepVerification() {
   const [codes, setCodes] = useState(['', '', '', '', '', ''])
   const [rememberDevice, setRememberDevice] = useState(false)
   const [error, setError] = useState('')
+  const [resendCooldown, setResendCooldown] = useState(0)
+  const [resendLoading, setResendLoading] = useState(false)
+  const [resendSuccess, setResendSuccess] = useState(false)
   const inputRefs = useRef([])
   const navigate = useNavigate()
 
@@ -26,6 +32,34 @@ function TwoStepVerification() {
       inputRefs.current[0].focus()
     }
   }, [navigate])
+
+  useEffect(() => {
+    if (resendCooldown <= 0) return
+    const timer = setInterval(() => setResendCooldown((c) => Math.max(0, c - 1)), 1000)
+    return () => clearInterval(timer)
+  }, [resendCooldown])
+
+  const handleResend = async () => {
+    const email = sessionStorage.getItem('pendingVerificationEmail')
+    if (!email || resendCooldown > 0 || resendLoading) return
+
+    setResendLoading(true)
+    setError('')
+    setResendSuccess(false)
+
+    try {
+      const sendVerificationCode = httpsCallable(functions, 'sendVerificationCode')
+      await sendVerificationCode({ email })
+      setResendSuccess(true)
+      setResendCooldown(RESEND_COOLDOWN_SECONDS)
+      setTimeout(() => setResendSuccess(false), 4000)
+    } catch (err) {
+      console.error('Resend verification code error:', err)
+      setError(err.message || 'Failed to resend code. Please try again.')
+    } finally {
+      setResendLoading(false)
+    }
+  }
 
   const handleChange = (index, value) => {
     // Only allow single digit
@@ -174,6 +208,25 @@ function TwoStepVerification() {
             <Check className="w-5 h-5" />
             Verify
           </button>
+
+          <div className="resend-container">
+            {resendSuccess && (
+              <p className="resend-success" role="status">Code sent. Check your email.</p>
+            )}
+            <button
+              type="button"
+              onClick={handleResend}
+              disabled={resendCooldown > 0 || resendLoading}
+              className="resend-button"
+              aria-label={resendCooldown > 0 ? `Resend in ${resendCooldown}s` : 'Resend code'}
+            >
+              {resendLoading
+                ? 'Sending...'
+                : resendCooldown > 0
+                  ? `Resend in ${resendCooldown}s`
+                  : 'Resend code'}
+            </button>
+          </div>
 
           <label className="remember-device">
             <input

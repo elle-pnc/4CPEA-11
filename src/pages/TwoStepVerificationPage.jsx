@@ -2,11 +2,14 @@ import { useState, useRef, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { MdCheck } from 'react-icons/md'
 import { signOut } from 'firebase/auth'
-import { auth } from '../firebase/config'
+import { auth, functions } from '../firebase/config'
+import { httpsCallable } from 'firebase/functions'
 import { verifyCode, deleteVerificationCode, saveTrustedDevice, getUserRole } from '../firebase/firestore'
 import { signIn } from '../firebase/auth'
 import { useTranslation } from '../contexts/TranslationContext'
 import './TwoStepVerificationPage.css'
+
+const RESEND_COOLDOWN_SECONDS = 60
 
 const TwoStepVerificationPage = () => {
   const [codes, setCodes] = useState(['', '', '', '', '', ''])
@@ -14,6 +17,9 @@ const TwoStepVerificationPage = () => {
   const [error, setError] = useState('')
   const [hasError, setHasError] = useState(false)
   const [rememberDevice, setRememberDevice] = useState(false)
+  const [resendCooldown, setResendCooldown] = useState(0)
+  const [resendLoading, setResendLoading] = useState(false)
+  const [resendSuccess, setResendSuccess] = useState(false)
   const inputRefs = useRef([])
   const navigate = useNavigate()
   const t = useTranslation()
@@ -28,6 +34,34 @@ const TwoStepVerificationPage = () => {
       inputRefs.current[0]?.focus()
     }
   }, [navigate])
+
+  useEffect(() => {
+    if (resendCooldown <= 0) return
+    const timer = setInterval(() => setResendCooldown((c) => Math.max(0, c - 1)), 1000)
+    return () => clearInterval(timer)
+  }, [resendCooldown])
+
+  const handleResend = async () => {
+    const email = sessionStorage.getItem('pendingVerificationEmail')
+    if (!email || resendCooldown > 0 || resendLoading) return
+
+    setResendLoading(true)
+    setError('')
+    setResendSuccess(false)
+
+    try {
+      const sendVerificationCode = httpsCallable(functions, 'sendVerificationCode')
+      await sendVerificationCode({ email })
+      setResendSuccess(true)
+      setResendCooldown(RESEND_COOLDOWN_SECONDS)
+      setTimeout(() => setResendSuccess(false), 4000)
+    } catch (err) {
+      console.error('Resend verification code error:', err)
+      setError(err.message || 'Failed to resend code. Please try again.')
+    } finally {
+      setResendLoading(false)
+    }
+  }
 
   const handleChange = (index, value) => {
     if (value.length > 1) return
@@ -191,6 +225,8 @@ const TwoStepVerificationPage = () => {
         <h1 className="verification-title">{t.twoStepVerification}</h1>
         <p className="verification-subtitle">{t.verificationSubtitle}</p>
 
+        {error && <p className="verification-error" role="alert">{error}</p>}
+
         <div className={`code-inputs-container ${hasError ? 'shake' : ''}`}>
           <div className="code-inputs-row">
             {[0, 1, 2, 3, 4, 5].map((index) => (
@@ -241,6 +277,25 @@ const TwoStepVerificationPage = () => {
             </>
           )}
         </button>
+
+        <div className="resend-container">
+          {resendSuccess && (
+            <p className="resend-success" role="status">{t.resendCodeSent}</p>
+          )}
+          <button
+            type="button"
+            onClick={handleResend}
+            disabled={resendCooldown > 0 || resendLoading || loading}
+            className="resend-button"
+            aria-label={resendCooldown > 0 ? t.resendCodeWait?.replace('{{seconds}}', resendCooldown) : t.resendCode}
+          >
+            {resendLoading
+              ? t.resendSending
+              : resendCooldown > 0
+                ? t.resendCodeWait?.replace('{{seconds}}', resendCooldown)
+                : t.resendCode}
+          </button>
+        </div>
       </div>
     </div>
   )

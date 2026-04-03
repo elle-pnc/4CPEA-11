@@ -259,7 +259,7 @@
                         onclick="togglePassword()"
                         tabindex="-1"
                     >
-                        👁️
+                        🙈
                     </button>
                 </div>
             </div>
@@ -379,17 +379,17 @@
             document.getElementById('successMessage').classList.remove('show');
         }
 
-        // Toggle password visibility
+        // Toggle password visibility (icon matches current state: eye = visible, monkey = hidden)
         window.togglePassword = function() {
             const passwordInput = document.getElementById('password');
             const toggleButton = passwordInput.nextElementSibling;
             
             if (passwordInput.type === 'password') {
                 passwordInput.type = 'text';
-                toggleButton.textContent = '🙈';
+                toggleButton.textContent = '👁️';
             } else {
                 passwordInput.type = 'password';
-                toggleButton.textContent = '👁️';
+                toggleButton.textContent = '🙈';
             }
         };
 

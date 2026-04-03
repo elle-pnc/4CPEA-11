@@ -532,6 +532,63 @@ export const subscribeJeepney = (jeepneyId = 'jeep1', callback) => {
 const RP4_DEVICE_ID = 'cpe11-afcs'
 const GPS_CURRENT_REF = () => doc(db, 'rp4_debug', RP4_DEVICE_ID, 'gps', 'current')
 const GPS_MANUAL_REF = () => doc(db, 'rp4_debug', RP4_DEVICE_ID, 'gps', 'manual')
+const RP4_DEVICE_REF = () => doc(db, 'rp4_debug', RP4_DEVICE_ID)
+
+/**
+ * Parse terminal from a GPS-related Firestore document (gps/current or embedded map).
+ * Firmware/bridge may use currentTerminal, terminal, terminalId, etc.
+ * @param {object|null|undefined} data
+ * @returns {number|'unknown'|null}
+ */
+export const extractGpsTerminalFromDoc = (data) => {
+  if (!data || typeof data !== 'object') return null
+  const tryCoerce = (v) => {
+    if (v === undefined || v === null || v === '') return null
+    if (v === 'unknown') return 'unknown'
+    if (typeof v === 'number' && Number.isFinite(v)) {
+      const t = Math.round(v)
+      return t >= 1 && t <= 4 ? t : null
+    }
+    const s = String(v).trim()
+    if (/^[1-4]$/.test(s)) return parseInt(s, 10)
+    const m = s.match(/\b([1-4])\b/)
+    if (m) return parseInt(m[1], 10)
+    const n = parseInt(s, 10)
+    return Number.isFinite(n) && n >= 1 && n <= 4 ? n : null
+  }
+  const keys = [
+    'currentTerminal',
+    'terminal',
+    'terminalId',
+    'nearestTerminal',
+    'detectedTerminal',
+    'terminalNumber',
+    'nearest_terminal',
+  ]
+  for (const k of keys) {
+    const c = tryCoerce(data[k])
+    if (c != null) return c
+  }
+  return null
+}
+
+/** Fallback: some stacks write GPS terminal fields on rp4_debug/{deviceId} root */
+const extractParentDocGpsTerminal = (data) => {
+  if (!data || typeof data !== 'object') return null
+  const direct = extractGpsTerminalFromDoc({
+    currentTerminal:
+      data.gpsCurrentTerminal ??
+      data.currentGpsTerminal ??
+      data.gpsLastTerminal ??
+      data.lastGpsTerminal,
+  })
+  if (direct != null) return direct
+  if (data.gps && typeof data.gps === 'object') {
+    const nested = extractGpsTerminalFromDoc(data.gps)
+    if (nested != null) return nested
+  }
+  return null
+}
 
 /**
  * Subscribe to current terminal for the jeepney.
@@ -543,42 +600,69 @@ const GPS_MANUAL_REF = () => doc(db, 'rp4_debug', RP4_DEVICE_ID, 'gps', 'manual'
  */
 export const subscribeCurrentTerminal = (callback) => {
   let manualTerminal = null
-  let gpsTerminal = null
+  let gpsCurrentDocTerminal = null
+  let parentDocGpsTerminal = null
   let preferredSource = 'manual'
+
+  const effectiveGpsTerminal = () => gpsCurrentDocTerminal ?? parentDocGpsTerminal
 
   const computeValue = () => {
     if (preferredSource === 'gps') {
-      return gpsTerminal
+      return effectiveGpsTerminal()
     }
-    return manualTerminal !== null ? manualTerminal : gpsTerminal
+    return manualTerminal != null ? manualTerminal : effectiveGpsTerminal()
   }
 
   const notify = () => {
     callback(computeValue())
   }
 
-  const unsubManual = onSnapshot(GPS_MANUAL_REF(), (snap) => {
-    const data = snap.exists() ? snap.data() : {}
-    manualTerminal = data.currentTerminal !== undefined ? data.currentTerminal : null
-    preferredSource = typeof data.preferredSource === 'string' ? data.preferredSource : 'manual'
-    notify()
-  }, () => {
-    manualTerminal = null
-    notify()
-  })
+  const unsubManual = onSnapshot(
+    GPS_MANUAL_REF(),
+    (snap) => {
+      const data = snap.exists() ? snap.data() : {}
+      manualTerminal = data.currentTerminal !== undefined ? data.currentTerminal : null
+      preferredSource = typeof data.preferredSource === 'string' ? data.preferredSource : 'manual'
+      notify()
+    },
+    (err) => {
+      console.error('GPS manual doc listener error:', err)
+      manualTerminal = null
+      notify()
+    }
+  )
 
-  const unsubGps = onSnapshot(GPS_CURRENT_REF(), (snap) => {
-    const data = snap.exists() ? snap.data() : {}
-    gpsTerminal = data.currentTerminal !== undefined ? data.currentTerminal : null
-    notify()
-  }, () => {
-    gpsTerminal = null
-    notify()
-  })
+  const unsubGps = onSnapshot(
+    GPS_CURRENT_REF(),
+    (snap) => {
+      const data = snap.exists() ? snap.data() : {}
+      gpsCurrentDocTerminal = extractGpsTerminalFromDoc(data)
+      notify()
+    },
+    (err) => {
+      console.error('GPS current doc listener error:', err)
+      gpsCurrentDocTerminal = null
+      notify()
+    }
+  )
+
+  const unsubDevice = onSnapshot(
+    RP4_DEVICE_REF(),
+    (snap) => {
+      parentDocGpsTerminal = snap.exists() ? extractParentDocGpsTerminal(snap.data()) : null
+      notify()
+    },
+    (err) => {
+      console.error('RP4 device doc listener error:', err)
+      parentDocGpsTerminal = null
+      notify()
+    }
+  )
 
   return () => {
     unsubManual()
     unsubGps()
+    unsubDevice()
   }
 }
 

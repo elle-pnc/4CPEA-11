@@ -20,6 +20,7 @@ import {
 import { subscribeToLastTapForUser, subscribeToSeatEventsForUser, RP4_DEVICE_ID } from '../firebase/rp4Taps'
 import { doc, onSnapshot, collection } from 'firebase/firestore'
 import { db } from '../firebase/config'
+import { extractGpsTerminalFromDoc, extractParentDocGpsTerminal } from '../utils/gpsTerminal'
 import './CommuterDashboard.css'
 
 const BASE = import.meta.env.BASE_URL || '/'
@@ -57,10 +58,11 @@ const CommuterDashboard = ({ currentUser, userData, setUserData, onLogout }) => 
           setTimeout(() => setShowTapInNotification(false), 5000)
         }
         
-        // Detect tap-out (fallback for directTapOut when no seat event): status changed from 'onboarded' to null AND route was cleared
-        // Primary tap-out detection is via seatEvents (ir_available) - skip if we already showed from seatEvents
+        // Detect tap-out (fallback when no seat event): status onboarded → null AND route cleared.
+        // Dedupe with seatEvents: either path may run first; both must share lastTapOutSuccessAtRef.
         if (prevStatusRef.current === 'onboarded' && newStatus === null && newRoute === null && prevRouteRef.current) {
-          if (Date.now() - lastTapOutSuccessAtRef.current < 2000) return // Already showed from seatEvents
+          if (Date.now() - lastTapOutSuccessAtRef.current < 4000) return
+          lastTapOutSuccessAtRef.current = Date.now()
           setCompletedTripRoute({
             from: prevRouteRef.current.from,
             to: prevRouteRef.current.to
@@ -92,6 +94,7 @@ const CommuterDashboard = ({ currentUser, userData, setUserData, onLogout }) => 
   useEffect(() => {
     if (!currentUser?.uid) return
     const unsubscribe = subscribeToSeatEventsForUser(RP4_DEVICE_ID, currentUser.uid, () => {
+      if (Date.now() - lastTapOutSuccessAtRef.current < 4000) return
       lastTapOutSuccessAtRef.current = Date.now()
       const route = prevRouteRef.current
       if (route) {
@@ -212,7 +215,8 @@ const CommuterDashboard = ({ currentUser, userData, setUserData, onLogout }) => 
   ])
 
   const currentTerminal = userData?.currentTerminal || 1
-  const [liveTerminal, setLiveTerminal] = useState('unknown')
+  /** Resolved terminal for active jeep (GPS vs manual); null = none / waiting for GPS */
+  const [liveTerminal, setLiveTerminal] = useState(null)
   const balance = userData?.balance || 250.00
   const currentRoute = userData?.currentRoute || null // { from: 1, to: 2 }
   const userStatus = userData?.status || null // 'waiting', 'onboarded', or null
@@ -550,40 +554,68 @@ const CommuterDashboard = ({ currentUser, userData, setUserData, onLogout }) => 
   useEffect(() => {
     const deviceId = 'cpe11-afcs'
     let manualTerminal = null
-    let gpsTerminal = null
+    let gpsCurrentDocTerminal = null
+    let parentDocGpsTerminal = null
     let preferredSource = 'manual'
+
+    const effectiveGpsTerminal = () => gpsCurrentDocTerminal ?? parentDocGpsTerminal
 
     const computeValue = () => {
       if (preferredSource === 'gps') {
-        return gpsTerminal
+        return effectiveGpsTerminal()
       }
-      return manualTerminal !== null ? manualTerminal : gpsTerminal
+      return manualTerminal != null ? manualTerminal : effectiveGpsTerminal()
     }
 
     const notify = () => {
       const value = computeValue()
-      if (value !== undefined && value !== null) setLiveTerminal(value)
+      // Always update (including null) so switching Manual → GPS clears stale manual number immediately
+      setLiveTerminal(value === undefined || value === null ? null : value)
     }
 
-    const unsubManual = onSnapshot(doc(db, 'rp4_debug', deviceId, 'gps', 'manual'), (snap) => {
-      const data = snap.exists() ? snap.data() : {}
-      manualTerminal = data.currentTerminal !== undefined
-        ? data.currentTerminal
-        : null
-      preferredSource = typeof data.preferredSource === 'string' ? data.preferredSource : 'manual'
-      notify()
-    }, () => { manualTerminal = null; notify() })
+    const unsubManual = onSnapshot(
+      doc(db, 'rp4_debug', deviceId, 'gps', 'manual'),
+      (snap) => {
+        const data = snap.exists() ? snap.data() : {}
+        manualTerminal = data.currentTerminal !== undefined ? data.currentTerminal : null
+        preferredSource = typeof data.preferredSource === 'string' ? data.preferredSource : 'manual'
+        notify()
+      },
+      () => {
+        manualTerminal = null
+        notify()
+      }
+    )
 
-    const unsubGps = onSnapshot(doc(db, 'rp4_debug', deviceId, 'gps', 'current'), (snap) => {
-      gpsTerminal = snap.exists() && snap.data()?.currentTerminal !== undefined
-        ? snap.data().currentTerminal
-        : null
-      notify()
-    }, () => { gpsTerminal = null; notify() })
+    const unsubGps = onSnapshot(
+      doc(db, 'rp4_debug', deviceId, 'gps', 'current'),
+      (snap) => {
+        const data = snap.exists() ? snap.data() : {}
+        gpsCurrentDocTerminal = extractGpsTerminalFromDoc(data)
+        notify()
+      },
+      () => {
+        gpsCurrentDocTerminal = null
+        notify()
+      }
+    )
+
+    const unsubDevice = onSnapshot(
+      doc(db, 'rp4_debug', deviceId),
+      (snap) => {
+        parentDocGpsTerminal = snap.exists() ? extractParentDocGpsTerminal(snap.data()) : null
+        notify()
+      },
+      () => {
+        parentDocGpsTerminal = null
+        notify()
+      }
+    )
 
     return () => {
       unsubManual()
       unsubGps()
+      unsubDevice()
     }
   }, [])
 
@@ -643,7 +675,15 @@ const CommuterDashboard = ({ currentUser, userData, setUserData, onLogout }) => 
                   <div className="jeepney-terminal-badge">
                     <span className="terminal-live-label">Current Terminal</span>
                     <span className="terminal-live-value">
-                      {isActive ? (typeof liveTerminal === 'number' ? liveTerminal : (typeof liveTerminal === 'string' && /\d+/.test(liveTerminal) ? liveTerminal.match(/\d+/)[0] : liveTerminal)) : '—'}
+                      {isActive
+                        ? (() => {
+                            const lt = liveTerminal
+                            if (lt == null || lt === 'unknown') return '—'
+                            if (typeof lt === 'number') return lt
+                            if (typeof lt === 'string' && /\d+/.test(lt)) return lt.match(/\d+/)[0]
+                            return lt
+                          })()
+                        : '—'}
                     </span>
                   </div>
                   <div className="jeepney-name">{jeepney.name}</div>
