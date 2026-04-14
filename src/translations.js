@@ -45,6 +45,25 @@ export const translations = {
     changeOrigin: 'Change origin terminal',
     tappedIn: "You're tapped in!",
     enjoyRide: 'Enjoy your ride',
+    statusBoardingFarePaid: 'Fare paid — take your seat',
+    statusBoardingWaitingSeat: 'Waiting to be seated',
+    boardingAutoCanceled:
+      'No seat detected in time. Your booking was canceled. Tap again when you are ready to board.',
+    arrivalTitle: "You've arrived at your destination",
+    arrivalDestinationLine: 'Your stop: Terminal {{terminal}}',
+    arrivalMessage:
+      'Please remain seated until the vehicle has come to a complete stop. Watch your step when leaving and take all your belongings.',
+    arrivalOffboardHint:
+      'When you are ready to leave, wait until the vehicle has stopped, then exit carefully. Your trip will end once you have alighted.',
+    arrivalGotIt: 'Got it',
+    arrivalExtendQuestion: 'Do you wish to extend your trip?',
+    arrivalExtendYes: 'Yes',
+    arrivalExtendNo: 'Not now',
+    tripThankYouTitle: 'Thank you for riding with us',
+    tripThankYouMessage:
+      'We appreciate you choosing AFCS. Travel safely, and we hope to see you again soon.',
+    tripThankYouRoute: 'Your trip: Terminal {{from}} → Terminal {{to}}',
+    tripThankYouClose: 'Close',
     
     // Top-Up
     topUpBalance: 'Top-Up Balance',
@@ -210,6 +229,25 @@ export const translations = {
     changeOrigin: 'Palitan ang origin terminal',
     tappedIn: 'Naka-tap in na kayo!',
     enjoyRide: 'Magsaya sa inyong biyahe',
+    statusBoardingFarePaid: 'Bayad na — umupo na po',
+    statusBoardingWaitingSeat: 'Naghihintay na maupo',
+    boardingAutoCanceled:
+      'Walang upuan sa tamang oras. Kinansela ang booking. Mag-tap muli kapag handa nang sumakay.',
+    arrivalTitle: 'Nakarating na po kayo sa inyong destinasyon',
+    arrivalDestinationLine: 'Inyong babaan: Terminal {{terminal}}',
+    arrivalMessage:
+      'Manatili po munang nakaupo hanggang sa tuluyang huminto ang sasakyan. Mag-ingat sa pagbaba at siguruhing kumpleto ang inyong dala.',
+    arrivalOffboardHint:
+      'Kapag handa na kayong bumaba, maghintay pong huminto ang sasakyan, bumaba nang maingat, at matatapos ang inyong biyahe kapag nakababa na kayo.',
+    arrivalGotIt: 'OK',
+    arrivalExtendQuestion: 'Gusto nyo bang pahabain ang inyong biyahe?',
+    arrivalExtendYes: 'Oo',
+    arrivalExtendNo: 'Hindi muna',
+    tripThankYouTitle: 'Salamat po sa inyong pagsakay',
+    tripThankYouMessage:
+      'Pinahahalagahan namin kayo bilang pasahero ng AFCS. Ingat po sa biyahe, at inaasahan naming makita kayong muli.',
+    tripThankYouRoute: 'Inyong biyahe: Terminal {{from}} → Terminal {{to}}',
+    tripThankYouClose: 'Isara',
     
     // Top-Up
     topUpBalance: 'Top-Up ng Balanse',
@@ -372,6 +410,25 @@ export const translations = {
     changeOrigin: 'Cambiar terminal de origen',
     tappedIn: '¡Estás registrado!',
     enjoyRide: 'Disfruta tu viaje',
+    statusBoardingFarePaid: 'Fare paid — take your seat',
+    statusBoardingWaitingSeat: 'Esperando tomar asiento',
+    boardingAutoCanceled:
+      'No seat detected in time. Your booking was canceled. Tap again when you are ready to board.',
+    arrivalTitle: 'Ha llegado a su destino',
+    arrivalDestinationLine: 'Su parada: Terminal {{terminal}}',
+    arrivalMessage:
+      'Permanezca sentado hasta que el vehículo se detenga por completo. Tenga cuidado al bajar y no olvide sus pertenencias.',
+    arrivalOffboardHint:
+      'Cuando vaya a bajar, espere a que el vehículo se detenga, baje con cuidado y su viaje finalizará al descender.',
+    arrivalGotIt: 'Entendido',
+    arrivalExtendQuestion: '¿Desea extender su viaje?',
+    arrivalExtendYes: 'Sí',
+    arrivalExtendNo: 'Ahora no',
+    tripThankYouTitle: 'Gracias por viajar con nosotros',
+    tripThankYouMessage:
+      'Agradecemos que haya elegido AFCS. Viaje con seguridad; esperamos verle de nuevo pronto.',
+    tripThankYouRoute: 'Su viaje: Terminal {{from}} → Terminal {{to}}',
+    tripThankYouClose: 'Cerrar',
     
     // Top-Up
     topUpBalance: 'Recargar Saldo',
@@ -536,6 +593,23 @@ export const translations = {
     changeOrigin: '更改起点终端',
     tappedIn: '您已刷卡上车！',
     enjoyRide: '祝您旅途愉快',
+    statusBoardingFarePaid: 'Fare paid — take your seat',
+    statusBoardingWaitingSeat: '等待就座',
+    boardingAutoCanceled:
+      'No seat detected in time. Your booking was canceled. Tap again when you are ready to board.',
+    arrivalTitle: '您已到达目的地',
+    arrivalDestinationLine: '下车站点：终端 {{terminal}}',
+    arrivalMessage:
+      '请在车辆完全停稳前保持就座。下车时注意脚下，并带好随身物品。',
+    arrivalOffboardHint: '准备下车时，请待车辆停稳后小心下车，下车后即完成本次行程。',
+    arrivalGotIt: '知道了',
+    arrivalExtendQuestion: '是否延长行程？',
+    arrivalExtendYes: '是',
+    arrivalExtendNo: '暂不',
+    tripThankYouTitle: '感谢乘坐',
+    tripThankYouMessage: '感谢您选择 AFCS。祝您一路平安，期待再次同行。',
+    tripThankYouRoute: '行程：终端 {{from}} → 终端 {{to}}',
+    tripThankYouClose: '关闭',
     
     // Top-Up
     topUpBalance: '充值余额',
@@ -694,6 +768,25 @@ export const translations = {
     changeOrigin: '出発地ターミナルを変更',
     tappedIn: 'タップインしました！',
     enjoyRide: '良い旅を',
+    statusBoardingFarePaid: 'Fare paid — take your seat',
+    statusBoardingWaitingSeat: '着席までお待ちください',
+    boardingAutoCanceled:
+      'No seat detected in time. Your booking was canceled. Tap again when you are ready to board.',
+    arrivalTitle: '目的地に到着しました',
+    arrivalDestinationLine: '降車：ターミナル {{terminal}}',
+    arrivalMessage:
+      '車両が完全に停車するまで座席にお留まりください。降車時は足元にご注意のうえ、お忘れ物のないようお願いいたします。',
+    arrivalOffboardHint:
+      'お降りの際は停車をお待ちいただき、安全にご降車ください。降車後に行程が完了します。',
+    arrivalGotIt: '閉じる',
+    arrivalExtendQuestion: '行程を延長しますか？',
+    arrivalExtendYes: 'はい',
+    arrivalExtendNo: 'いいえ',
+    tripThankYouTitle: 'ご乗車ありがとうございました',
+    tripThankYouMessage:
+      'AFCS をご利用いただき誠にありがとうございます。お気をつけてお帰りください。またのご利用をお待ちしております。',
+    tripThankYouRoute: '区間：ターミナル {{from}} → ターミナル {{to}}',
+    tripThankYouClose: '閉じる',
     
     // Top-Up
     topUpBalance: '残高チャージ',
@@ -858,6 +951,25 @@ export const translations = {
     changeOrigin: '출발지 터미널 변경',
     tappedIn: '탭인되었습니다!',
     enjoyRide: '즐거운 여행 되세요',
+    statusBoardingFarePaid: 'Fare paid — take your seat',
+    statusBoardingWaitingSeat: '착석 대기 중',
+    boardingAutoCanceled:
+      'No seat detected in time. Your booking was canceled. Tap again when you are ready to board.',
+    arrivalTitle: '목적지에 도착했습니다',
+    arrivalDestinationLine: '하차 정류장: 터미널 {{terminal}}',
+    arrivalMessage:
+      '차량이 완전히 정차할 때까지 자리에 머물러 주세요. 하차 시 발을 조심하고 소지품을 잊지 마세요.',
+    arrivalOffboardHint:
+      '하차하실 때는 차량이 멈출 때까지 기다리신 뒤 안전하게 내려 주세요. 내리시면 여행이 종료됩니다.',
+    arrivalGotIt: '확인',
+    arrivalExtendQuestion: '여행을 연장하시겠습니까?',
+    arrivalExtendYes: '예',
+    arrivalExtendNo: '아니요',
+    tripThankYouTitle: '이용해 주셔서 감사합니다',
+    tripThankYouMessage:
+      'AFCS를 이용해 주셔서 감사합니다. 안전한 하루 되시길 바라며, 다시 뵙기를 기대합니다.',
+    tripThankYouRoute: '이용 구간: 터미널 {{from}} → 터미널 {{to}}',
+    tripThankYouClose: '닫기',
     
     // Top-Up
     topUpBalance: '잔액 충전',

@@ -13,6 +13,9 @@ export function extractGpsTerminalFromDoc(data) {
     }
     const s = String(v).trim()
     if (/^[1-4]$/.test(s)) return parseInt(s, 10)
+    // Firmware strings like "terminal4", "Terminal 3", "TERMINAL2"
+    const terminalWord = s.match(/terminal\s*([1-4])(?:\b|$)/i)
+    if (terminalWord) return parseInt(terminalWord[1], 10)
     const m = s.match(/\b([1-4])\b/)
     if (m) return parseInt(m[1], 10)
     const n = parseInt(s, 10)
@@ -32,6 +35,14 @@ export function extractGpsTerminalFromDoc(data) {
     if (c != null) return c
   }
   return null
+}
+
+/**
+ * Coerce a live terminal value (number, string, etc.) to 1–4 or null.
+ * Used when comparing vehicle position to the commuter's destination.
+ */
+export function coerceTerminalToNumber(value) {
+  return extractGpsTerminalFromDoc({ currentTerminal: value })
 }
 
 export function extractParentDocGpsTerminal(data) {

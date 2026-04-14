@@ -23,10 +23,37 @@ import {
   updateUserBalance,
   updateUserStatus,
   updateUserRoute,
-  updateJeepneySeatCount,
   addTransaction
 } from './firestore'
 import { calculateFare } from '../utils/fareCalculator'
+
+/** Shown on reader lastTap when onboarded user taps card again — must match Cloud Function. */
+export const LAST_TAP_REASON_ALIGHT_TO_FINISH =
+  'Please alight to finish your trip. Tapping your card again does not end your ride.'
+
+function processedSeatOutStorageKey(userId) {
+  return `afcs_processed_seat_out_${userId}`
+}
+
+function isSeatOutEventProcessed(userId, eventDocId) {
+  try {
+    const set = new Set(JSON.parse(sessionStorage.getItem(processedSeatOutStorageKey(userId)) || '[]'))
+    return set.has(eventDocId)
+  } catch {
+    return false
+  }
+}
+
+function markSeatOutEventProcessed(userId, eventDocId) {
+  try {
+    const key = processedSeatOutStorageKey(userId)
+    const set = new Set(JSON.parse(sessionStorage.getItem(key) || '[]'))
+    set.add(eventDocId)
+    sessionStorage.setItem(key, JSON.stringify([...set].slice(-100)))
+  } catch {
+    /* ignore quota / private mode */
+  }
+}
 
 // RP4 Firestore paths (from your structure)
 export const RP4_COLLECTION = 'rp4_debug'
@@ -164,45 +191,17 @@ export async function processTap(tapDocId, tapData, jeepney) {
   const userName = [user.firstName, user.lastName].filter(Boolean).join(' ') || user.email || 'Passenger'
   const status = user.status || null
 
-  // Tap-out: user is onboarded
+  // Onboarded: match Cloud Function — offboarding is IR-only (ir_available); card tap does not clear trip or seatCount.
   if (status === 'onboarded') {
-    try {
-      // Double-tap guard: reject tap-out if user tapped in less than 3 seconds ago
-      const deviceDoc = await getDoc(getRp4DocRef(deviceId))
-      const deviceData = deviceDoc.exists() ? deviceDoc.data() : {}
-      const seat1 = deviceData.seat1 || {}
-      const seat2 = deviceData.seat2 || {}
-      const occupiedAt = (seat1.occupantUserId === userId ? seat1.occupiedAt : null) ||
-        (seat2.occupantUserId === userId ? seat2.occupiedAt : null)
-      if (occupiedAt) {
-        const occupiedMs = occupiedAt.toDate ? occupiedAt.toDate().getTime() : (occupiedAt._seconds || 0) * 1000
-        const elapsedMs = Date.now() - occupiedMs
-        if (elapsedMs < 3000) {
-          const result = { known: true, active: false, reason: 'Already tapped in. Wait 3 seconds before tapping out.', name: userName }
-          await writeLastTap(deviceId, tapData, result)
-          await markTapProcessed(deviceId, tapDocId, result).catch(() => {})
-          return result
-        }
-      }
-
-      const route = user.currentRoute || { from: 1, to: 1 }
-      await updateUserStatus(userId, null)
-      await updateUserRoute(userId, null)
-      const currentSeatCount = Math.max(0, j?.seatCount ?? 0)
-      if (currentSeatCount > 0) {
-        await updateJeepneySeatCount('jeep1', currentSeatCount - 1)
-      }
-      const result = { known: true, active: true, reason: 'Tap out successful', name: userName }
-      await writeLastTap(deviceId, tapData, result)
-      await markTapProcessed(deviceId, tapDocId, result).catch(() => {})
-      return result
-    } catch (err) {
-      console.error('RP4 tap-out error:', err)
-      const result = { known: true, active: false, reason: err.message || 'Tap out failed', name: userName }
-      await writeLastTap(deviceId, tapData, result)
-      await markTapProcessed(deviceId, tapDocId, result).catch(() => {})
-      return result
+    const result = {
+      known: true,
+      active: false,
+      reason: LAST_TAP_REASON_ALIGHT_TO_FINISH,
+      name: userName
     }
+    await writeLastTap(deviceId, tapData, result)
+    await markTapProcessed(deviceId, tapDocId, result).catch(() => {})
+    return result
   }
 
   // Tap-in: user must be waiting
@@ -220,7 +219,7 @@ export async function processTap(tapDocId, tapData, jeepney) {
 
   const route = user.currentRoute || { from: user.currentTerminal || 1, to: user.currentTerminal || 1 }
   const fare = calculateFare(route.from, route.to)
-  const balance = user.balance ?? 250
+  const balance = Number(user.balance ?? 0)
   const currentSeatCount = Math.max(0, j?.seatCount ?? 0)
   const maxSeats = j?.maxSeats ?? 2
 
@@ -239,9 +238,17 @@ export async function processTap(tapDocId, tapData, jeepney) {
   }
 
   try {
+    const tapRef = doc(db, RP4_COLLECTION, deviceId, 'taps', tapDocId)
+    const tapPre = await getDoc(tapRef)
+    if (tapPre.exists() && tapPre.data()?.processed === true) {
+      const result = { known: true, active: false, reason: 'Tap already processed', name: userName }
+      await writeLastTap(deviceId, tapData, result).catch(() => {})
+      return result
+    }
+    // Match Cloud Function: fare deducted + boarding; seatCount +1 only on seatEvents ir_occupied (server).
+    // Commuters cannot write rp4_debug (boardingQueue); only driver/admin or processRp4Tap should run tap-in.
     await updateUserBalance(userId, -fare)
-    await updateUserStatus(userId, 'onboarded')
-    await updateJeepneySeatCount('jeep1', currentSeatCount + 1)
+    await updateUserStatus(userId, 'boarding')
     const newBalance = balance - fare
     await addTransaction(userId, {
       type: 'trip',
@@ -251,7 +258,7 @@ export async function processTap(tapDocId, tapData, jeepney) {
       balanceAfter: newBalance,
       jeepneyId: 'jeep1'
     })
-    const result = { known: true, active: true, reason: 'Valid card', name: userName }
+    const result = { known: true, active: false, reason: 'Fare paid. Take your seat.', name: userName }
     await writeLastTap(deviceId, tapData, result)
     await markTapProcessed(deviceId, tapDocId, result).catch(() => {})
     return result
@@ -285,8 +292,19 @@ export function subscribeToLastTapForUser(deviceId, userId, onTapInSuccess) {
     if (!docSnap.exists()) return
     const data = docSnap.data()
     const lastTap = data?.lastTap
-    if (!lastTap || lastTap.uid !== myCardUid || lastTap.active !== true) return
-    if (lastTap.reason === 'Tap out successful') return // Only fire for tap-in, not tap-out
+    if (!lastTap || lastTap.uid !== myCardUid) return
+    if (lastTap.reason === 'Tap out successful') return
+    if (
+      lastTap.reason === LAST_TAP_REASON_ALIGHT_TO_FINISH ||
+      String(lastTap.reason || '').includes('seat sensor (IR)')
+    ) {
+      return
+    }
+    // CF: active false for "Fare paid..."; active true when seated / boarded
+    const farePaidWaitingForSeat =
+      lastTap.known === true &&
+      lastTap.reason === 'Fare paid. Take your seat.'
+    if (lastTap.active !== true && !farePaidWaitingForSeat) return
     const ts = lastTap.ts || 0
     if (ts <= lastSeenTsRef.current) return
     lastSeenTsRef.current = ts
@@ -322,6 +340,8 @@ export function subscribeToSeatEventsForUser(deviceId, userId, onTapOutSuccess) 
     }
     snapshot.docChanges().forEach((change) => {
       if (change.type !== 'added') return
+      const eventDocId = change.doc.id
+      if (isSeatOutEventProcessed(userId, eventDocId)) return
       const data = change.doc.data()
       if (data.event !== 'ir_available' || data.status !== 'available') return
       const seatId = data.seatId || (() => { const p = change.doc.id.split('_'); return p.length >= 2 ? p[1] : null })()
@@ -329,15 +349,21 @@ export function subscribeToSeatEventsForUser(deviceId, userId, onTapOutSuccess) 
       // Check if current user was in this seat (read rp4_debug; Cloud Function may have cleared it)
       getDoc(getRp4DocRef(deviceId)).then((deviceSnap) => {
         if (!deviceSnap.exists()) return
+        if (isSeatOutEventProcessed(userId, eventDocId)) return
         const deviceData = deviceSnap.data()
         const seatData = deviceData[seatId]
         if (seatData?.occupantUserId === userId) {
+          markSeatOutEventProcessed(userId, eventDocId)
           notifyTapOutOnce()
           return
         }
         // Seat may be cleared (Cloud Function ran first); refetch user to confirm tap-out
         getUser(userId).then((user) => {
-          if (user?.status === null) notifyTapOutOnce()
+          if (isSeatOutEventProcessed(userId, eventDocId)) return
+          if (user?.status === null) {
+            markSeatOutEventProcessed(userId, eventDocId)
+            notifyTapOutOnce()
+          }
         }).catch(() => {})
       }).catch((err) => console.error('Seat event tap-out check error:', err))
     })

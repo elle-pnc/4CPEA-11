@@ -1,4 +1,4 @@
-import { useState, useEffect, useLayoutEffect, useRef } from 'react'
+import { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { MdPerson, MdEdit, MdArrowForward, MdMap, MdAdd, MdCreditCard, MdAccountBalance, MdLocationOn } from 'react-icons/md'
 import { FaMobileAlt, FaCoins } from 'react-icons/fa'
@@ -20,7 +20,7 @@ import {
 import { subscribeToLastTapForUser, subscribeToSeatEventsForUser, RP4_DEVICE_ID } from '../firebase/rp4Taps'
 import { doc, onSnapshot, collection } from 'firebase/firestore'
 import { db } from '../firebase/config'
-import { extractGpsTerminalFromDoc, extractParentDocGpsTerminal } from '../utils/gpsTerminal'
+import { extractGpsTerminalFromDoc, extractParentDocGpsTerminal, coerceTerminalToNumber } from '../utils/gpsTerminal'
 import './CommuterDashboard.css'
 
 const BASE = import.meta.env.BASE_URL || '/'
@@ -32,7 +32,29 @@ const CommuterDashboard = ({ currentUser, userData, setUserData, onLogout }) => 
   const prevStatusRef = useRef(null)
   const prevRouteRef = useRef(null)
   const lastTapOutSuccessAtRef = useRef(0)
-  
+  const arrivalNotifiedRouteKeyRef = useRef(null)
+  const prevOnboardedRouteKeyForArrivalRef = useRef(null)
+
+  const THANK_YOU_SESSION_MS = 15000
+
+  /** One thank-you modal per trip end; blocks double fire (seat + user doc), Firestore replays, and tab refocus. */
+  const openTripThankYouModal = useCallback((route) => {
+    if (!route || !currentUser?.uid) return
+    if (Date.now() - lastTapOutSuccessAtRef.current < 4000) return
+    try {
+      const k = `afcs_ty_recent_${currentUser.uid}_${route.from}_${route.to}`
+      const t = parseInt(sessionStorage.getItem(k), 10)
+      if (Number.isFinite(t) && Date.now() - t < THANK_YOU_SESSION_MS) return
+      sessionStorage.setItem(k, String(Date.now()))
+    } catch {
+      /* private mode */
+    }
+    lastTapOutSuccessAtRef.current = Date.now()
+    setShowArrivalModal(false)
+    setCompletedTripRoute({ from: route.from, to: route.to })
+    setShowSuccessModal(true)
+  }, [currentUser?.uid])
+
   // Real-time listener for user data updates (status, balance, seat count reflected via Firestore)
   useEffect(() => {
     if (!currentUser || !currentUser.uid) return
@@ -52,7 +74,12 @@ const CommuterDashboard = ({ currentUser, userData, setUserData, onLogout }) => 
           prevRouteRef.current = newRoute
         }
         
-        // Detect tap-in: status changed from 'waiting' to 'onboarded' (RP4 or driver tap-in)
+        // Tap-in complete when passenger is seated: boarding → onboarded (card tap only sets boarding)
+        if (prevStatusRef.current === 'boarding' && newStatus === 'onboarded') {
+          setShowTapInNotification(true)
+          setTimeout(() => setShowTapInNotification(false), 5000)
+        }
+        // Legacy: waiting → onboarded if data predates boarding status
         if (prevStatusRef.current === 'waiting' && newStatus === 'onboarded') {
           setShowTapInNotification(true)
           setTimeout(() => setShowTapInNotification(false), 5000)
@@ -61,13 +88,7 @@ const CommuterDashboard = ({ currentUser, userData, setUserData, onLogout }) => 
         // Detect tap-out (fallback when no seat event): status onboarded → null AND route cleared.
         // Dedupe with seatEvents: either path may run first; both must share lastTapOutSuccessAtRef.
         if (prevStatusRef.current === 'onboarded' && newStatus === null && newRoute === null && prevRouteRef.current) {
-          if (Date.now() - lastTapOutSuccessAtRef.current < 4000) return
-          lastTapOutSuccessAtRef.current = Date.now()
-          setCompletedTripRoute({
-            from: prevRouteRef.current.from,
-            to: prevRouteRef.current.to
-          })
-          setShowSuccessModal(true)
+          openTripThankYouModal(prevRouteRef.current)
         }
         
         prevStatusRef.current = newStatus
@@ -88,29 +109,23 @@ const CommuterDashboard = ({ currentUser, userData, setUserData, onLogout }) => 
     })
 
     return () => unsubscribe()
-  }, [currentUser?.uid])
+  }, [currentUser?.uid, openTripThankYouModal])
 
-  // Seat events (firmware): listen to ir_available for tap-out - path: rp4_debug/cpe11-afcs/seatEvents
+  // Seat alight events → thank-you modal (deduped in subscribe + sessionStorage)
   useEffect(() => {
     if (!currentUser?.uid) return
     const unsubscribe = subscribeToSeatEventsForUser(RP4_DEVICE_ID, currentUser.uid, () => {
-      if (Date.now() - lastTapOutSuccessAtRef.current < 4000) return
-      lastTapOutSuccessAtRef.current = Date.now()
       const route = prevRouteRef.current
-      if (route) {
-        setCompletedTripRoute({ from: route.from, to: route.to })
-        setShowSuccessModal(true)
-      }
+      if (route) openTripThankYouModal(route)
     })
     return () => unsubscribe()
-  }, [currentUser?.uid])
+  }, [currentUser?.uid, openTripThankYouModal])
 
   // RP4: when this user's card is tapped in on the reader, refetch user doc and show success (ensures UI shows onboarded)
   useEffect(() => {
     if (!currentUser?.uid || !setUserData) return
     const unsubscribe = subscribeToLastTapForUser(RP4_DEVICE_ID, currentUser.uid, async () => {
-      setShowTapInNotification(true)
-      setTimeout(() => setShowTapInNotification(false), 5000)
+      // Toast is driven by status boarding → onboarded; here only refresh Firestore user cache
       // Refetch user doc so status/balance/route are guaranteed in sync (fixes listener not firing or stale cache)
       try {
         const fresh = await getUser(currentUser.uid)
@@ -205,7 +220,11 @@ const CommuterDashboard = ({ currentUser, userData, setUserData, onLogout }) => 
   const [infoMessage, setInfoMessage] = useState('')
   const [showSuccessModal, setShowSuccessModal] = useState(false)
   const [completedTripRoute, setCompletedTripRoute] = useState(null)
+  const [showArrivalModal, setShowArrivalModal] = useState(false)
+  const [arrivalTerminalNumber, setArrivalTerminalNumber] = useState(null)
   const [showTapInNotification, setShowTapInNotification] = useState(false)
+  /** While status is boarding: emphatic fare-paid line, then softer line until seated or cancel. */
+  const [boardingUiPhase, setBoardingUiPhase] = useState('emphasis')
   const [isCancelingBooking, setIsCancelingBooking] = useState(false)
   const [jeepneys, setJeepneys] = useState([
     { id: 'jeep1', name: 'Jeep 1', seatCount: 0, maxSeats: 2, direction: 'right', fromTerminal: 1, toTerminal: 2, isActive: false },
@@ -214,14 +233,97 @@ const CommuterDashboard = ({ currentUser, userData, setUserData, onLogout }) => 
     { id: 'jeep4', name: 'Jeep 4', seatCount: 0, maxSeats: 2, direction: 'right', fromTerminal: 1, toTerminal: 2, isActive: false },
   ])
 
-  const currentTerminal = userData?.currentTerminal || 1
   /** Resolved terminal for active jeep (GPS vs manual); null = none / waiting for GPS */
   const [liveTerminal, setLiveTerminal] = useState(null)
-  const balance = userData?.balance || 250.00
+  /** Use ?? so a real balance of ₱0 is not replaced by a display default (|| would treat 0 as falsy) */
+  const balanceRaw = Number(userData?.balance ?? 0)
+  const balance = Number.isFinite(balanceRaw) ? balanceRaw : 0
   const currentRoute = userData?.currentRoute || null // { from: 1, to: 2 }
-  const userStatus = userData?.status || null // 'waiting', 'onboarded', or null
+  const userStatus = userData?.status || null // 'waiting', 'boarding', 'onboarded', or null
+  const isWaitingForSeat = userStatus === 'waiting' || userStatus === 'boarding'
+  /** Seated riders for this journey. Card tap only sets boarding — not counted until onboarded. */
+  const routeCardSeatedCount = userStatus === 'onboarded' ? 1 : 0
   const currentLanguage = userData?.language || 'English'
   const t = getTranslations(currentLanguage)
+
+  const BOARDING_EMPHASIS_MS = 10000
+  /** Paid (tap-in) but not seated — auto-clear so UI cannot stay stuck on boarding forever */
+  const BOARDING_AUTO_CANCEL_MS = 20000
+
+  useEffect(() => {
+    if (userStatus !== 'boarding') {
+      setBoardingUiPhase('emphasis')
+      return
+    }
+    setBoardingUiPhase('emphasis')
+    const id = window.setTimeout(() => setBoardingUiPhase('soft'), BOARDING_EMPHASIS_MS)
+    return () => window.clearTimeout(id)
+  }, [userStatus])
+
+  /** Same Firestore + local state as manual Cancel, without blocking the cancel button */
+  const clearActiveRouteBooking = useCallback(
+    async (uid, { postDelayMs = 0 } = {}) => {
+      await updateUserRoute(uid, null)
+      await updateUserStatus(uid, null)
+      if (postDelayMs > 0) await new Promise((r) => setTimeout(r, postDelayMs))
+      setUserData((prev) => ({
+        ...prev,
+        currentRoute: null,
+        currentRideExtended: false,
+        status: null,
+      }))
+    },
+    [setUserData]
+  )
+
+  useEffect(() => {
+    if (userStatus !== 'boarding' || !currentUser?.uid) return
+    const uid = currentUser.uid
+    const timeoutId = window.setTimeout(async () => {
+      try {
+        const fresh = await getUser(uid)
+        if (!fresh || fresh.status !== 'boarding') return
+        await clearActiveRouteBooking(uid, { postDelayMs: 0 })
+        prevStatusRef.current = null
+        prevRouteRef.current = null
+        const msg = getTranslations(currentLanguage).boardingAutoCanceled
+        if (msg) {
+          setInfoMessage(msg)
+          setShowInfoModal(true)
+        }
+      } catch (e) {
+        console.error('Auto-cancel boarding (no seat):', e)
+      }
+    }, BOARDING_AUTO_CANCEL_MS)
+    return () => window.clearTimeout(timeoutId)
+  }, [userStatus, currentUser?.uid, currentLanguage, clearActiveRouteBooking])
+
+  // Seated passenger (onboarded): notify once per route when vehicle live terminal matches destination
+  useEffect(() => {
+    if (userStatus !== 'onboarded') {
+      arrivalNotifiedRouteKeyRef.current = null
+      prevOnboardedRouteKeyForArrivalRef.current = null
+      return
+    }
+    if (!currentRoute || currentRoute.from == null || currentRoute.to == null) return
+
+    const routeKey = `${currentRoute.from}-${currentRoute.to}`
+    if (prevOnboardedRouteKeyForArrivalRef.current !== routeKey) {
+      arrivalNotifiedRouteKeyRef.current = null
+      prevOnboardedRouteKeyForArrivalRef.current = routeKey
+    }
+
+    const dest = Number(currentRoute.to)
+    if (!Number.isFinite(dest) || dest < 1 || dest > 4) return
+
+    const live = coerceTerminalToNumber(liveTerminal)
+    if (live == null || live !== dest) return
+    if (arrivalNotifiedRouteKeyRef.current === routeKey) return
+
+    arrivalNotifiedRouteKeyRef.current = routeKey
+    setArrivalTerminalNumber(dest)
+    setShowArrivalModal(true)
+  }, [userStatus, currentRoute, liveTerminal])
 
   const getDirectionArrows = (jeepney) => {
     const fromTerminal = jeepney.fromTerminal || jeepney.fromTerminal
@@ -273,16 +375,6 @@ const CommuterDashboard = ({ currentUser, userData, setUserData, onLogout }) => 
   }, []) // Only run once when component mounts
 
   const handleChooseDestination = () => {
-    // Only allow choosing destination if origin is selected
-    if (!currentTerminal) {
-      setInfoMessage('Please select your origin terminal first')
-      setShowInfoModal(true)
-      setTimeout(() => {
-        saveScrollPosition()
-        navigate('/select-origin')
-      }, 1500)
-      return
-    }
     saveScrollPosition()
     navigate('/choose-destination', { state: { mode: 'choose' } })
   }
@@ -332,6 +424,29 @@ const CommuterDashboard = ({ currentUser, userData, setUserData, onLogout }) => 
     return true
   }
 
+  const handleArrivalDismiss = () => {
+    setShowArrivalModal(false)
+    setArrivalTerminalNumber(null)
+  }
+
+  const handleArrivalExtendYes = () => {
+    if (userStatus !== 'onboarded' || !currentRoute) {
+      handleArrivalDismiss()
+      return
+    }
+    const from = currentRoute.from
+    const to = currentRoute.to
+    if ((to > from && to === 4) || (to < from && to === 1)) {
+      setInfoMessage('Cannot extend route: You have reached the end terminal.')
+      setShowInfoModal(true)
+      handleArrivalDismiss()
+      return
+    }
+    handleArrivalDismiss()
+    saveScrollPosition()
+    navigate('/choose-destination', { state: { mode: 'extend', currentRoute } })
+  }
+
   const handleChangeRoute = () => {
     // Change route - navigate to destination page with 'choose' mode
     saveScrollPosition()
@@ -342,15 +457,7 @@ const CommuterDashboard = ({ currentUser, userData, setUserData, onLogout }) => 
     if (!currentUser?.uid || !currentRoute || isCancelingBooking) return
     setIsCancelingBooking(true)
     try {
-      await updateUserRoute(currentUser.uid, null)
-      await updateUserStatus(currentUser.uid, null)
-      // Brief delay so loading state is visible and transition feels smooth
-      await new Promise(resolve => setTimeout(resolve, 400))
-      setUserData({
-        ...userData,
-        currentRoute: null,
-        status: null
-      })
+      await clearActiveRouteBooking(currentUser.uid, { postDelayMs: 400 })
     } catch (error) {
       console.error('Error canceling booking:', error)
       setErrorMessage('Failed to cancel booking. Please try again.')
@@ -358,11 +465,6 @@ const CommuterDashboard = ({ currentUser, userData, setUserData, onLogout }) => 
     } finally {
       setIsCancelingBooking(false)
     }
-  }
-
-  const handleSelectOrigin = () => {
-    saveScrollPosition()
-    navigate('/select-origin')
   }
 
   const handleTopUp = () => {
@@ -732,34 +834,6 @@ const CommuterDashboard = ({ currentUser, userData, setUserData, onLogout }) => 
 
           {/* Modern Route Card */}
           <div className="route-card-modern">
-            {/* Current Location Section */}
-            <div className="location-section-modern">
-              <div className="location-pin-container">
-                <div className="location-pin-pulse"></div>
-                <div className="location-icon-modern">
-                  <MdLocationOn />
-                </div>
-              </div>
-              <div className="location-info-modern">
-                <div className="location-label-modern">{t.currentLocation}</div>
-                <div className="terminal-info-group">
-                  <span className="terminal-badge-modern">
-                    <span className="terminal-prefix">{t.terminal}</span>
-                    <span className="terminal-number-text">{currentTerminal}</span>
-                  </span>
-                  {userStatus !== 'onboarded' && (
-                    <button 
-                      className="edit-origin-btn-modern"
-                      onClick={handleSelectOrigin}
-                      title={t.changeOrigin}
-                    >
-                      <MdEdit />
-                    </button>
-                  )}
-                </div>
-              </div>
-            </div>
-
             {/* Route Visualization */}
             {currentRoute && (
               <>
@@ -788,14 +862,20 @@ const CommuterDashboard = ({ currentUser, userData, setUserData, onLogout }) => 
                   
                   {/* Status Badge */}
                   {userStatus && (
-                    <div className={`route-status-modern ${userStatus}`}>
+                    <div className={`route-status-modern ${userStatus === 'onboarded' ? 'onboarded' : 'waiting'}`}>
                       <div className="status-indicator"></div>
                       <div className="status-content">
                         <span className="status-icon-modern">
-                          {userStatus === 'waiting' ? '⏳' : '✅'}
+                          {isWaitingForSeat ? '⏳' : '✅'}
                         </span>
                         <span className="status-text-modern">
-                          {userStatus === 'waiting' ? 'Waiting for boarding' : 'Currently onboarded'}
+                          {userStatus === 'boarding'
+                            ? (boardingUiPhase === 'soft'
+                                ? t.statusBoardingWaitingSeat
+                                : t.statusBoardingFarePaid)
+                            : isWaitingForSeat
+                              ? 'Waiting for boarding'
+                              : 'Currently onboarded'}
                         </span>
                       </div>
                     </div>
@@ -805,10 +885,10 @@ const CommuterDashboard = ({ currentUser, userData, setUserData, onLogout }) => 
                 {/* Second Card: Route Details with Extension Status */}
                 <div className="route-details-card">
                   <div className="route-details-content">
-                    {/* Passenger Count */}
+                    {/* Passenger count = physically seated (onboarded). Boarding = paid, not yet in seatCount. */}
                     <div className="passenger-count-section">
                       <MdPerson className="passenger-icon" />
-                      <span className="passenger-number">1</span>
+                      <span className="passenger-number">{routeCardSeatedCount}</span>
                     </div>
                     
                     {/* Separator */}
@@ -846,7 +926,7 @@ const CommuterDashboard = ({ currentUser, userData, setUserData, onLogout }) => 
 
             {/* Action Buttons - Modern Design */}
             <div className="route-actions-modern">
-              {currentTerminal && !currentRoute && (
+              {!currentRoute && (
                 <button 
                   className="action-btn-modern primary-modern"
                   onClick={handleChooseDestination}
@@ -858,7 +938,7 @@ const CommuterDashboard = ({ currentUser, userData, setUserData, onLogout }) => 
                 </button>
               )}
               
-              {currentRoute && userStatus === 'waiting' && (
+              {currentRoute && isWaitingForSeat && (
                 <>
                   <button 
                     className="action-btn-modern secondary-modern"
@@ -968,31 +1048,64 @@ const CommuterDashboard = ({ currentUser, userData, setUserData, onLogout }) => 
         </div>
       )}
 
-      {/* Success Modal - Trip Completed (Tap Out) */}
+      {/* Arrival at destination (seated passenger; live terminal matches route destination) */}
+      {showArrivalModal && arrivalTerminalNumber != null && (
+        <div className="custom-modal-overlay" onClick={handleArrivalDismiss}>
+          <div className="custom-modal arrival-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-icon-wrapper arrival-icon-wrapper">
+              <div className="modal-icon arrival-icon-circle">
+                <MdLocationOn className="arrival-modal-pin" aria-hidden />
+              </div>
+            </div>
+            <h2 className="modal-title">{t.arrivalTitle}</h2>
+            <div className="modal-content">
+              <p className="arrival-destination-line">
+                {t.arrivalDestinationLine.replace('{{terminal}}', String(arrivalTerminalNumber))}
+              </p>
+              <p className="modal-message arrival-message">{t.arrivalMessage}</p>
+              <p className="arrival-offboard-hint">{t.arrivalOffboardHint}</p>
+              {canExtendRoute() && (
+                <p className="arrival-extend-question">{t.arrivalExtendQuestion}</p>
+              )}
+            </div>
+            <div className="modal-actions">
+              {canExtendRoute() ? (
+                <>
+                  <button type="button" className="modal-btn secondary-btn" onClick={handleArrivalDismiss}>
+                    {t.arrivalExtendNo}
+                  </button>
+                  <button type="button" className="modal-btn primary-btn" onClick={handleArrivalExtendYes}>
+                    {t.arrivalExtendYes}
+                  </button>
+                </>
+              ) : (
+                <button type="button" className="modal-btn primary-btn" onClick={handleArrivalDismiss}>
+                  {t.arrivalGotIt}
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Thank you after passenger alights — distinct from arrival-at-destination */}
       {showSuccessModal && completedTripRoute && (
         <div className="custom-modal-overlay" onClick={() => {
           setShowSuccessModal(false)
           setCompletedTripRoute(null)
         }}>
-          <div className="custom-modal success-modal" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-icon-wrapper success-icon-wrapper">
-              <div className="modal-icon success-icon-circle trip-completed-icon">✓</div>
+          <div className="custom-modal thank-you-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-icon-wrapper thank-you-icon-wrapper">
+              <div className="modal-icon thank-you-icon-circle">✓</div>
             </div>
-            <h2 className="modal-title">Trip Completed!</h2>
+            <h2 className="modal-title">{t.tripThankYouTitle}</h2>
             <div className="modal-content">
-              <p className="modal-message">You have successfully completed your trip!</p>
-              <div className="success-details-card">
-                <div className="success-detail-item">
-                  <span className="detail-label">Completed Route:</span>
-                  <span className="detail-value highlight">
-                    Terminal {completedTripRoute.from} → Terminal {completedTripRoute.to}
-                  </span>
-                </div>
-                <div className="success-trip-badge">
-                  <span className="trip-icon">🎉</span>
-                  <span className="trip-text">Trip completed successfully</span>
-                </div>
-              </div>
+              <p className="modal-message thank-you-message">{t.tripThankYouMessage}</p>
+              <p className="thank-you-route-note">
+                {t.tripThankYouRoute
+                  .replace('{{from}}', String(completedTripRoute.from))
+                  .replace('{{to}}', String(completedTripRoute.to))}
+              </p>
             </div>
             <div className="modal-actions">
               <button 
@@ -1002,7 +1115,7 @@ const CommuterDashboard = ({ currentUser, userData, setUserData, onLogout }) => 
                   setCompletedTripRoute(null)
                 }}
               >
-                OK
+                {t.tripThankYouClose}
               </button>
             </div>
           </div>

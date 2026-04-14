@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Users, UsersRound, ArrowRight, DollarSign, TrendingUp, FileText, Compass, MapPin } from 'lucide-react'
 import { useSidebar } from '../hooks/useSidebar'
@@ -21,7 +21,7 @@ import UserInactive from '../components/UserInactive'
 import UserOnline from '../components/UserOnline'
 import { auth } from '../firebase/config'
 import { onAuthStateChanged } from 'firebase/auth'
-import { subscribeUsersByStatus, subscribeActiveShift, startShift, endShift, subscribeDailyPassengerCount, subscribeDailyRevenue, subscribeDailyExpenses, saveDailyExpenses, subscribeJeepney, syncJeepneySeatCount, subscribeUserTripTransactions, updateJeepneyRoute, subscribeCurrentTerminal, updateCurrentTerminal, subscribeTerminalSourcePreference, updateTerminalSourcePreference } from '../firebase/firestore'
+import { subscribeUsersByStatus, subscribeUsersByStatuses, subscribeActiveShift, startShift, endShift, subscribeDailyPassengerCount, subscribeDailyRevenue, subscribeDailyExpenses, saveDailyExpenses, subscribeJeepney, updateJeepneyRoute, subscribeCurrentTerminal, updateCurrentTerminal, subscribeTerminalSourcePreference, updateTerminalSourcePreference } from '../firebase/firestore'
 import './Dashboard.css'
 
 // Icon mapping for stats
@@ -40,6 +40,19 @@ const colorMap = {
   gray: 'Gray',
 }
 
+/**
+ * True when the vehicle is strictly past the passenger's booked drop-off on terminals 1–4,
+ * using the jeep's service direction (from < to → increasing = 'right', else 'left').
+ */
+function isVehiclePastPassengerDropOff(vehicleTerminal, dropOff, direction) {
+  const v = Number(vehicleTerminal)
+  const d = Number(dropOff)
+  if (!Number.isFinite(v) || !Number.isFinite(d) || v < 1 || v > 4 || d < 1 || d > 4) return false
+  if (v === d) return false
+  if (direction === 'left') return v < d
+  return v > d
+}
+
 function Dashboard() {
   const navigate = useNavigate()
   const { isOpen: sidebarOpen, toggle: toggleSidebar, close: closeSidebar } = useSidebar(false)
@@ -49,7 +62,6 @@ function Dashboard() {
   const [dailyPassengers, setDailyPassengers] = useState(0)
   const [dailyRevenue, setDailyRevenue] = useState(0)
   const [dailyExpenses, setDailyExpenses] = useState(0)
-  const [passengerExtensions, setPassengerExtensions] = useState(new Set()) // Track which passengers have extended
   const [showExpensesModal, setShowExpensesModal] = useState(false)
   const [expenseAmount, setExpenseAmount] = useState('')
   const [expenseDescription, setExpenseDescription] = useState('')
@@ -65,6 +77,8 @@ function Dashboard() {
   const [currentTerminal, setCurrentTerminal] = useState(null)
   const [isUpdatingTerminal, setIsUpdatingTerminal] = useState(false)
   const [terminalSourcePreference, setTerminalSourcePreference] = useState('manual') // 'manual' | 'gps'
+  const [passengerArrivalModal, setPassengerArrivalModal] = useState(null) // { items: Array } | null
+  const [passengerArrivalCountdown, setPassengerArrivalCountdown] = useState(0)
 
   const getPhilippinesTimeString = (date = new Date()) => {
     return new Intl.DateTimeFormat('en-PH', {
@@ -141,7 +155,7 @@ function Dashboard() {
   }
 
   useEffect(() => {
-    const unsubscribe = subscribeUsersByStatus('waiting', (users) => {
+    const unsubscribe = subscribeUsersByStatuses(['waiting', 'boarding'], (users) => {
       setWaitingUsers(users || [])
     })
     return () => unsubscribe()
@@ -150,46 +164,9 @@ function Dashboard() {
   useEffect(() => {
     const unsubscribe = subscribeUsersByStatus('onboarded', (users) => {
       setOnboardedUsers(users || [])
-      // Sync seatCount whenever onboarded users change to ensure accuracy
-      syncJeepneySeatCount('jeep1').catch((error) => {
-        console.error('Failed to sync jeepney seatCount:', error.message)
-      })
     })
     return () => unsubscribe()
   }, [])
-
-  // Subscribe to trip transactions for each onboarded user to detect extensions
-  useEffect(() => {
-    if (!onboardedUsers || onboardedUsers.length === 0) {
-      setPassengerExtensions(new Set())
-      return
-    }
-
-    const unsubscribes = []
-    const extendedSet = new Set()
-
-    onboardedUsers.forEach((user) => {
-      if (user.id) {
-        const unsubscribe = subscribeUserTripTransactions(user.id, (transactionCount) => {
-          // If user has 2+ trip transactions, they've extended
-          setPassengerExtensions((prev) => {
-            const newSet = new Set(prev)
-            if (transactionCount >= 2) {
-              newSet.add(user.id)
-            } else {
-              newSet.delete(user.id)
-            }
-            return newSet
-          })
-        })
-        unsubscribes.push(unsubscribe)
-      }
-    })
-
-    return () => {
-      unsubscribes.forEach((unsub) => unsub())
-    }
-  }, [onboardedUsers])
 
   useEffect(() => {
     const unsubscribe = subscribeDailyPassengerCount((count) => {
@@ -218,11 +195,6 @@ function Dashboard() {
   }, [currentUser])
 
   useEffect(() => {
-    // Sync seatCount on mount to fix any discrepancies
-    syncJeepneySeatCount('jeep1').catch((error) => {
-      console.error('Failed to sync jeepney seatCount:', error.message)
-    })
-    
     const unsubscribe = subscribeJeepney('jeep1', (jeepney) => {
       setJeepneySeatCount(jeepney.seatCount || 0)
       setJeepneyMaxSeats(jeepney.maxSeats || 2)
@@ -309,12 +281,159 @@ function Dashboard() {
     }))
   }, [waitingUsers])
 
+  /** While GPS/manual flickers to unknown, keep "at destination" so Extended green does not return */
+  const atDestLatchRef = useRef(new Map())
+  /** Once true: jeep reached this passenger's booked To; used to detect leaving without alighting */
+  const visitedBookedStopRef = useRef(new Map())
+  /** Last seen booked `to` per user — reset visit tracking when their destination changes (e.g. extend) */
+  const lastBookedToRef = useRef(new Map())
+  /** Sticky until passenger leaves the vehicle (removed from onboarded) */
+  const violatorPassengerIdsRef = useRef(new Set())
+  const [violatorRenderKey, setViolatorRenderKey] = useState(0)
+
   const onboardedDisplay = useMemo(() => {
     const slots = 2
     const filled = onboardedUsers.slice(0, slots)
     const placeholders = Array.from({ length: slots - filled.length }, () => null)
     return [...filled, ...placeholders]
   }, [onboardedUsers])
+
+  /** Vehicle live terminal matches booked destination; latched through brief invalid terminal reads */
+  const { atDestinationPassengerIds, atDestinationPassengerKey } = useMemo(() => {
+    const latch = atDestLatchRef.current
+    const valid =
+      typeof currentTerminal === 'number' && currentTerminal >= 1 && currentTerminal <= 4
+    const onboardedIds = new Set(onboardedUsers.map((u) => u.id).filter(Boolean))
+    for (const uid of [...latch.keys()]) {
+      if (!onboardedIds.has(uid)) latch.delete(uid)
+    }
+
+    const ids = new Set()
+    for (const u of onboardedUsers) {
+      if (!u?.id) continue
+      const dest = Number(u.currentRoute?.to ?? u.currentTerminal)
+      if (!Number.isFinite(dest) || dest < 1 || dest > 4) {
+        latch.delete(u.id)
+        continue
+      }
+      if (valid) {
+        if (currentTerminal === dest) {
+          latch.set(u.id, true)
+          ids.add(u.id)
+        } else {
+          latch.set(u.id, false)
+        }
+      } else if (latch.get(u.id) === true) {
+        ids.add(u.id)
+      }
+    }
+    const idKey = [...ids].sort().join('|')
+    return { atDestinationPassengerIds: ids, atDestinationPassengerKey: idKey }
+  }, [onboardedUsers, currentTerminal])
+
+  const serviceDirection = jeepneyRoute.direction === 'left' ? 'left' : 'right'
+
+  useEffect(() => {
+    const violators = violatorPassengerIdsRef.current
+    const visited = visitedBookedStopRef.current
+    const lastTo = lastBookedToRef.current
+    const onboardedIds = new Set(onboardedUsers.map((u) => u.id).filter(Boolean))
+    const valid =
+      typeof currentTerminal === 'number' && currentTerminal >= 1 && currentTerminal <= 4
+
+    const beforeViolators = new Set(violators)
+
+    for (const uid of [...violators]) {
+      if (!onboardedIds.has(uid)) violators.delete(uid)
+    }
+    for (const uid of [...visited.keys()]) {
+      if (!onboardedIds.has(uid)) {
+        visited.delete(uid)
+        lastTo.delete(uid)
+      }
+    }
+
+    for (const u of onboardedUsers) {
+      if (!u?.id) continue
+      if (violators.has(u.id)) continue
+
+      const dest = Number(u.currentRoute?.to ?? u.currentTerminal)
+      if (!Number.isFinite(dest) || dest < 1 || dest > 4) continue
+
+      const prevTo = lastTo.get(u.id)
+      if (prevTo !== dest) {
+        lastTo.set(u.id, dest)
+        visited.delete(u.id)
+      }
+
+      if (!valid) continue
+
+      if (currentTerminal === dest) {
+        visited.set(u.id, true)
+        continue
+      }
+
+      const past = isVehiclePastPassengerDropOff(currentTerminal, dest, serviceDirection)
+      const leftAfterReachingBookedStop = visited.get(u.id) === true
+      if (past || leftAfterReachingBookedStop) {
+        violators.add(u.id)
+      }
+    }
+
+    const changed =
+      beforeViolators.size !== violators.size ||
+      [...beforeViolators].some((id) => !violators.has(id)) ||
+      [...violators].some((id) => !beforeViolators.has(id))
+    if (changed) setViolatorRenderKey((k) => k + 1)
+  }, [onboardedUsers, currentTerminal, serviceDirection])
+
+  const PASSENGER_ARRIVAL_AUTO_DISMISS_MS = 5000
+  const arrivalNotifiedRef = useRef(new Set())
+
+  useEffect(() => {
+    const atIds = atDestinationPassengerIds
+    for (const uid of [...arrivalNotifiedRef.current]) {
+      if (!atIds.has(uid)) arrivalNotifiedRef.current.delete(uid)
+    }
+    if (passengerArrivalModal != null) return
+
+    const seated = onboardedUsers.slice(0, 2)
+    const newcomers = []
+    for (let i = 0; i < seated.length; i++) {
+      const u = seated[i]
+      if (!u?.id || !atIds.has(u.id)) continue
+      if (arrivalNotifiedRef.current.has(u.id)) continue
+      const dest = Number(u.currentRoute?.to ?? u.currentTerminal)
+      newcomers.push({
+        userId: u.id,
+        slotNumber: i + 1,
+        destination: Number.isFinite(dest) ? dest : '—',
+      })
+    }
+    if (newcomers.length === 0) return
+    newcomers.forEach((n) => arrivalNotifiedRef.current.add(n.userId))
+    setPassengerArrivalModal({ items: newcomers })
+  }, [atDestinationPassengerKey, onboardedUsers, passengerArrivalModal])
+
+  useEffect(() => {
+    if (!passengerArrivalModal) {
+      setPassengerArrivalCountdown(0)
+      return
+    }
+    const seconds = Math.max(1, Math.ceil(PASSENGER_ARRIVAL_AUTO_DISMISS_MS / 1000))
+    setPassengerArrivalCountdown(seconds)
+    const intervalId = window.setInterval(() => {
+      setPassengerArrivalCountdown((s) => {
+        if (s <= 1) {
+          window.clearInterval(intervalId)
+          setPassengerArrivalModal(null)
+          return 0
+        }
+        return s - 1
+      })
+    }, 1000)
+    return () => window.clearInterval(intervalId)
+  }, [passengerArrivalModal])
 
   const currentPassengerCount = useMemo(() => {
     // Use jeepney seatCount from Firestore instead of counting onboarded users
@@ -488,16 +607,38 @@ function Dashboard() {
                   {/* Right Section: Passenger List */}
                   <div className="passengers-list">
                     {onboardedDisplay.map((passenger, index) => {
+                      void violatorRenderKey
                       const isOnboarded = !!passenger
                       const fromTerminalValue = passenger?.currentRoute?.from ?? passenger?.currentTerminal
                       const toTerminalValue = passenger?.currentRoute?.to ?? passenger?.currentTerminal
-                      const hasExtended = passenger?.id && passengerExtensions.has(passenger.id)
+                      const hasExtended = passenger?.currentRideExtended === true
+                      const atDestination =
+                        isOnboarded && passenger?.id && atDestinationPassengerIds.has(passenger.id)
+                      const isViolator =
+                        isOnboarded &&
+                        passenger?.id &&
+                        violatorPassengerIdsRef.current.has(passenger.id)
+                      // Violator is sticky and overrides in destination / extended
+                      const showViolator = isViolator
+                      const showInDestination = atDestination && !isViolator
+                      const showExtendedTrip =
+                        !!hasExtended && !showInDestination && !showViolator
+                      const passengerCardModifier = showViolator
+                        ? ' passenger-card--violator'
+                        : showInDestination
+                          ? ' passenger-card--in-destination'
+                          : showExtendedTrip
+                            ? ' passenger-card--extended-trip'
+                            : ''
 
                       const fromTerminal = isOnboarded ? `Terminal ${fromTerminalValue}` : '—'
                       const toTerminal = isOnboarded ? `Terminal ${toTerminalValue}` : '—'
 
                       return (
-                        <div key={passenger?.id || `placeholder-${index}`} className="passenger-card">
+                        <div
+                          key={passenger?.id || `placeholder-${index}`}
+                          className={`passenger-card${passengerCardModifier}`}
+                        >
                           {/* Left Section: User Icon + Number */}
                           <div className="passenger-card-left">
                             <div className="passenger-icon-wrapper">
@@ -526,7 +667,11 @@ function Dashboard() {
                               </div>
 
                               <div className="route-badge-wrap">
-                                {hasExtended && (
+                                {showViolator && <span className="violator-badge">Violator</span>}
+                                {showInDestination && (
+                                  <span className="in-destination-badge">In destination</span>
+                                )}
+                                {showExtendedTrip && (
                                   <span className="extended-badge">Extended</span>
                                 )}
                               </div>
@@ -683,6 +828,47 @@ function Dashboard() {
 
       {/* Sidebar */}
       <Sidebar isOpen={sidebarOpen} onClose={closeSidebar} onLogout={handleLogout} />
+
+      {/* Passenger reached booked stop — auto-dismiss after a few seconds */}
+      {passengerArrivalModal?.items?.length > 0 && (
+        <div className="passenger-arrival-modal-overlay" role="presentation">
+          <div
+            className="passenger-arrival-modal"
+            role="dialog"
+            aria-labelledby="passenger-arrival-title"
+            aria-modal="true"
+          >
+            <div className="passenger-arrival-modal-icon-wrap" aria-hidden>
+              <MapPin size={34} strokeWidth={2.2} />
+            </div>
+            <h3 id="passenger-arrival-title" className="passenger-arrival-modal-title">
+              Passenger at their booked stop
+            </h3>
+            <div className="passenger-arrival-modal-body">
+              {passengerArrivalModal.items.map((p) => (
+                <p key={p.userId} className="passenger-arrival-line">
+                  The passenger in <strong>seat {p.slotNumber}</strong> has reached <strong>Terminal {p.destination}</strong>,
+                  which is where they booked to get off.
+                </p>
+              ))}
+              <p className="passenger-arrival-hint">
+                Please <strong>wait until they have left the vehicle safely</strong> before you drive away.
+              </p>
+              <p className="passenger-arrival-hint">
+                If they <strong>want to extend the trip</strong> in the commuter app, they do that <strong>while still sitting down</strong>.
+                Wait until they are <strong>finished in the app</strong> and it is <strong>okay for you to move</strong>.
+              </p>
+            </div>
+            <p
+              className="passenger-arrival-countdown"
+              aria-live="polite"
+              aria-atomic="true"
+            >
+              Closes in <span className="passenger-arrival-countdown-value">{passengerArrivalCountdown}</span>s
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Expenses Modal */}
       {showExpensesModal && (

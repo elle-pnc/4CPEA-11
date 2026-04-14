@@ -91,10 +91,14 @@
     async function updateUserRoute(userId, route) {
       try {
         const userRef = doc(db, 'users', userId);
-        await updateDoc(userRef, {
+        const payload = {
           currentRoute: route,
           updatedAt: serverTimestamp()
-        });
+        };
+        if (route == null) {
+          payload.currentRideExtended = false;
+        }
+        await updateDoc(userRef, payload);
       } catch (error) {
         console.error('Error updating route:', error);
         throw error;
@@ -211,8 +215,72 @@
       return tapDoc;
     }
 
-    // Write seat event in firmware format: rp4_debug/cpe11-afcs/seatEvents/{eventId}
-    // eventId format: {tsMs}_{seatId}_ir_available (matches firmware)
+    /**
+     * Write seatEvents doc matching firmware shapes under rp4_debug/cpe11-afcs/seatEvents/{eventId}
+     * eventId: {tsMs}_{seatId}_{suffix}
+     *
+     * - ir_available + status available → Cloud Function tap-out / commuter IR listener
+     * - ir_occupied + status occupied → Cloud Function seat count + onboarded
+     * - pending_timeout + status available (screenshot from hardware diagnostic)
+     */
+    async function writeSeatFirmwareEvent(seatId, kind, { cardUid = null } = {}) {
+      const tsMs = Date.now();
+      const gateOpen = false;
+      const phase = 'idle';
+      let eventIdSuffix;
+      let payload;
+      if (kind === 'ir_available') {
+        eventIdSuffix = 'ir_available';
+        const u = cardUid || null;
+        payload = {
+          seatId,
+          event: 'ir_available',
+          status: 'available',
+          phase,
+          gateOpen,
+          uid: u,
+          cardUid: u,
+          tsMs,
+          createdAt: serverTimestamp(),
+          source: 'driver-sim'
+        };
+      } else if (kind === 'ir_occupied') {
+        eventIdSuffix = 'ir_occupied';
+        const uidVal = cardUid || null;
+        payload = {
+          seatId,
+          event: 'ir_occupied',
+          status: 'occupied',
+          phase,
+          gateOpen,
+          uid: uidVal,
+          cardUid: uidVal,
+          tsMs,
+          createdAt: serverTimestamp(),
+          source: 'driver-sim'
+        };
+      } else if (kind === 'pending_timeout') {
+        eventIdSuffix = 'pending_timeout';
+        payload = {
+          seatId,
+          event: 'pending_timeout',
+          status: 'available',
+          phase,
+          gateOpen,
+          uid: null,
+          tsMs,
+          createdAt: serverTimestamp(),
+          source: 'driver-sim'
+        };
+      } else {
+        throw new Error('Unknown seat event kind: ' + kind);
+      }
+      const eventId = `${tsMs}_${seatId}_${eventIdSuffix}`;
+      await setDoc(doc(db, RP4_COLLECTION, RP4_DEVICE_ID, 'seatEvents', eventId), payload);
+      return { eventId, payload };
+    }
+
+    // Tap-out helper: pick seat from device occupant, then ir_available
     async function writeSeatEventDoc(userId) {
       const deviceDoc = await getDoc(doc(db, RP4_COLLECTION, RP4_DEVICE_ID));
       let seatId = 'seat1';
@@ -221,24 +289,12 @@
         if (data.seat1?.occupantUserId === userId) seatId = 'seat1';
         else if (data.seat2?.occupantUserId === userId) seatId = 'seat2';
       }
-      const tsMs = Date.now();
-      const eventId = `${tsMs}_${seatId}_ir_available`;
-      const seatEvent = {
-        seatId,
-        event: 'ir_available',
-        status: 'available',
-        phase: 'idle',
-        uid: null,
-        tsMs,
-        createdAt: serverTimestamp(),
-        source: 'driver-sim'
-      };
-      await setDoc(doc(db, RP4_COLLECTION, RP4_DEVICE_ID, 'seatEvents', eventId), seatEvent);
-      return { ...seatEvent, seatId };
+      return writeSeatFirmwareEvent(seatId, 'ir_available', { cardUid: null });
     }
 
     // App State
     let waitingUsers = [];
+    let boardingUsers = [];
     let onboardedUsers = [];
     let jeepney = null;
     let loading = true;
@@ -267,12 +323,14 @@
         refreshBtn.disabled = true;
         refreshBtn.textContent = '🔄 Refreshing...';
         
-        const [waiting, onboarded] = await Promise.all([
+        const [waiting, boarding, onboarded] = await Promise.all([
           getUsersByStatus('waiting'),
+          getUsersByStatus('boarding'),
           getUsersByStatus('onboarded')
         ]);
         
         waitingUsers = waiting || [];
+        boardingUsers = boarding || [];
         onboardedUsers = onboarded || [];
         
         renderUsers();
@@ -291,17 +349,23 @@
 
     // Render Users
     function renderUsers() {
-      // Render waiting users
+      const preBoard = [...waitingUsers, ...boardingUsers];
+      // Render waiting + boarding (boarding = paid at reader, waiting for IR occupied)
       if (waitingListEl) {
-        if (waitingUsers.length === 0) {
-          waitingListEl.innerHTML = '<div class="empty-state"><p>No users waiting</p></div>';
+        if (preBoard.length === 0) {
+          waitingListEl.innerHTML = '<div class="empty-state"><p>No users waiting or boarding</p></div>';
         } else {
-          waitingListEl.innerHTML = waitingUsers.map(user => `
+          waitingListEl.innerHTML = preBoard.map(user => {
+            const isBoarding = user.status === 'boarding';
+            const badge = isBoarding
+              ? '<span class="status-pill boarding-pill">Boarding · needs IR seat</span>'
+              : '<span class="status-pill waiting-pill">Waiting</span>';
+            return `
             <div class="user-card waiting-card">
               <div class="user-info">
                 <div class="user-avatar">👤</div>
                 <div class="user-details">
-                  <div class="user-name">${user.firstName || ''} ${user.lastName || ''}</div>
+                  <div class="user-name">${user.firstName || ''} ${user.lastName || ''} ${badge}</div>
                   <div class="user-email">${user.email || ''}</div>
                   <div class="user-route">
                     <span class="route-label">Route:</span> ${getRouteDisplay(user)}
@@ -311,12 +375,23 @@
                   </div>
                 </div>
               </div>
-              <button class="action-button tap-in-button" onclick="handleTapIn('${user.id}')">
-                <span>✓</span>
-                <span>Tap In</span>
-              </button>
+              <div class="user-actions-col">
+                ${!isBoarding ? `
+                <button type="button" class="action-button tap-in-chain-button" onclick="handleFullChainTapIn('${user.id}')">
+                  Tap + IR (auto)
+                </button>` : ''}
+                <button class="action-button tap-in-button" onclick="handleTapIn('${user.id}')">
+                  <span>✓</span>
+                  <span>Card tap only</span>
+                </button>
+                ${isBoarding ? `
+                <button type="button" class="action-button ir-seat-button" onclick="handleIrOccupiedForUser('${user.id}')">
+                  IR: seat taken
+                </button>` : ''}
+              </div>
             </div>
-          `).join('');
+          `;
+          }).join('');
         }
       }
 
@@ -352,7 +427,7 @@
       // Update counts
       const waitingCountEl = document.getElementById('waiting-count');
       const onboardedCountEl = document.getElementById('onboarded-count');
-      if (waitingCountEl) waitingCountEl.textContent = waitingUsers.length;
+      if (waitingCountEl) waitingCountEl.textContent = preBoard.length;
       if (onboardedCountEl) onboardedCountEl.textContent = onboardedUsers.length;
     }
 
@@ -380,18 +455,18 @@
 
     // Tap In Handler (simulate RP4 tap)
     window.handleTapIn = async function(userId) {
-      const user = [...waitingUsers, ...onboardedUsers].find(u => u.id === userId);
+      const user = [...waitingUsers, ...boardingUsers, ...onboardedUsers].find(u => u.id === userId);
       if (!user) return;
 
       try {
         const tapDoc = await writeTapDoc(user);
         if (!tapDoc) return;
         await loadUsers();
-        showSuccess('Tap In Simulated', `${user.firstName || ''} ${user.lastName || ''} tap-in event sent to RP4 taps.`, {
+        showSuccess('Card tap sent', `${user.firstName || ''} ${user.lastName || ''}: tap doc written. Seat count still 0/2 until IR.`, {
           type: 'tap-in',
           userName: `${user.firstName || ''} ${user.lastName || ''}`.trim(),
           fare: 0,
-          route: 'Waiting for backend'
+          route: 'Next: click "IR: seat taken" when status shows Boarding (needs processRp4Tap + processSeatEvent deployed).'
         });
       } catch (error) {
         console.error('Error processing tap in:', error);
@@ -399,10 +474,118 @@
       }
     };
 
+    /**
+     * Card tap then wait for boarding (processRp4Tap) then write ir_occupied (processSeatEvent).
+     * Seat count stays 0 if Functions are not deployed or rider never becomes boarding.
+     */
+    window.handleFullChainTapIn = async function(userId) {
+      const user = waitingUsers.find((u) => u.id === userId);
+      if (!user) {
+        showError('Use this for a user in Waiting status only (refresh the list).');
+        return;
+      }
+      const cardUid = USER_ID_TO_CARD_UID[userId];
+      if (!cardUid) {
+        showError('No card UID mapped for this user in USER_ID_TO_CARD_UID.');
+        return;
+      }
+      const seatSel = document.getElementById('ir-sim-seat');
+      const seatId = seatSel ? seatSel.value : 'seat1';
+      try {
+        await writeTapDoc(user);
+        const deadline = Date.now() + 14000;
+        let sawBoarding = false;
+        while (Date.now() < deadline) {
+          await new Promise((r) => setTimeout(r, 700));
+          const snap = await getDoc(doc(db, 'users', userId));
+          const st = snap.exists() ? snap.data().status : null;
+          if (st === 'boarding') {
+            sawBoarding = true;
+            break;
+          }
+          if (st === 'onboarded') {
+            await loadUsers();
+            showSuccess('Already onboarded', 'User is already onboarded (unexpected for Waiting). Refresh lists.');
+            return;
+          }
+        }
+        if (!sawBoarding) {
+          await loadUsers();
+          showError(
+            'Rider did not become "boarding" within ~14s. The tap doc is in Firestore, but Cloud Function processRp4Tap is probably not running (deploy functions, use Blaze billing, check Firebase → Functions → Logs). Until then, seat count will stay 0/2.'
+          );
+          return;
+        }
+        await writeSeatFirmwareEvent(seatId, 'ir_occupied', { cardUid });
+        await new Promise((r) => setTimeout(r, 1200));
+        await loadUsers();
+        showSuccess('Tap + IR complete', `Sent ir_occupied for ${seatId}. If seat count is still 0, check processSeatEvent logs.`, {
+          type: 'ir-sim',
+          detail: `${seatId} · ${cardUid}`,
+          payload: { event: 'ir_occupied', status: 'occupied', seatId }
+        });
+      } catch (e) {
+        console.error(e);
+        showError(e.message || String(e));
+      }
+    };
+
+    // IR occupied for one boarding user (uses panel seat + card UID)
+    window.handleIrOccupiedForUser = async function(userId) {
+      const user = boardingUsers.find(u => u.id === userId);
+      if (!user) {
+        showError('User is not in boarding status.');
+        return;
+      }
+      const seatSel = document.getElementById('ir-sim-seat');
+      const seatId = seatSel ? seatSel.value : 'seat1';
+      const cardUid = USER_ID_TO_CARD_UID[userId] || '';
+      if (!cardUid) {
+        showError('No card UID mapped for this user.');
+        return;
+      }
+      try {
+        const { eventId } = await writeSeatFirmwareEvent(seatId, 'ir_occupied', { cardUid });
+        await loadUsers();
+        showSuccess('IR seat taken (sim)', `Wrote seatEvents/${eventId} with uid=${cardUid}`, { type: 'ir-sim', detail: eventId });
+      } catch (e) {
+        console.error(e);
+        showError(e.message || String(e));
+      }
+    };
+
+    // Panel: manual IR buttons
+    window.handleIrSimFire = async function(kind) {
+      const seatSel = document.getElementById('ir-sim-seat');
+      const seatId = seatSel ? seatSel.value : 'seat1';
+      const uidInput = document.getElementById('ir-sim-card-uid');
+      const rawUid = (uidInput && uidInput.value) ? uidInput.value.trim().toUpperCase() : '';
+      try {
+        const { eventId, payload } = await writeSeatFirmwareEvent(seatId, kind, {
+          cardUid: kind === 'pending_timeout' ? null : (rawUid || null)
+        });
+        appendIrSimLog(kind, eventId, payload);
+        showSuccess('Seat event written', eventId, { type: 'ir-sim', detail: eventId, payload });
+      } catch (e) {
+        console.error(e);
+        showError(e.message || String(e));
+      }
+    };
+
+    function appendIrSimLog(kind, eventId, payload) {
+      const el = document.getElementById('ir-sim-log');
+      if (!el) return;
+      const line = document.createElement('div');
+      line.className = 'ir-sim-log-line';
+      line.textContent = `[${new Date().toLocaleTimeString()}] ${kind} → ${eventId}`;
+      el.insertBefore(line, el.firstChild);
+      while (el.children.length > 15) el.removeChild(el.lastChild);
+    }
+
     // Tap Out Handler: always write seatEvents (firmware format) for consistency; Cloud Function processes it when user in seat
     // If user not in seat, also run directTapOut so tap-out still works
     window.handleTapOut = async function(userId) {
-      const user = [...waitingUsers, ...onboardedUsers].find(u => u.id === userId);
+      const user = [...waitingUsers, ...boardingUsers, ...onboardedUsers].find(u => u.id === userId);
       if (!user) return;
 
       try {
@@ -504,6 +687,28 @@
               <span class="detail-label">Fare Deducted:</span>
               <span class="detail-value fare-highlight">₱${details.fare?.toFixed(2)}</span>
             </div>
+            ${details.route && details.route.includes('Next:') ? `
+            <div class="success-detail-item" style="flex-direction:column;align-items:flex-start;gap:6px;">
+              <span class="detail-label">Seat count</span>
+              <span class="detail-value" style="text-align:left;font-size:13px;">Stays 0/2 until you run <strong>IR: seat taken</strong> (or ir_occupied). Requires deployed <code>processSeatEvent</code>.</span>
+            </div>
+            <div class="success-detail-item">
+              <span class="detail-label">Next step</span>
+              <span class="detail-value" style="text-align:left;font-size:13px;">${details.route}</span>
+            </div>` : ''}
+          `;
+        } else if (details.type === 'ir-sim') {
+          const p = details.payload;
+          detailsEl.innerHTML = `
+            <div class="success-detail-item">
+              <span class="detail-label">Document ID:</span>
+              <span class="detail-value" style="font-size:12px;word-break:break-all;">${details.detail || ''}</span>
+            </div>
+            ${p ? `
+            <div class="success-detail-item">
+              <span class="detail-label">Fields:</span>
+              <span class="detail-value" style="font-size:11px;word-break:break-all;text-align:left;">event=${p.event}, status=${p.status}, seatId=${p.seatId}, uid=${p.uid === null || p.uid === undefined ? 'null' : p.uid}</span>
+            </div>` : ''}
           `;
         }
         detailsEl.style.display = 'block';
@@ -1018,6 +1223,168 @@
       background-color: var(--accent-primary-dark);
       box-shadow: 0 4px 12px rgba(30, 136, 229, 0.4);
       transform: translateY(-2px);
+    }
+
+    .user-actions-col {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      align-items: stretch;
+    }
+
+    .ir-seat-button {
+      background-color: #7b1fa2;
+      color: #fff;
+      box-shadow: 0 2px 8px rgba(123, 31, 162, 0.35);
+    }
+
+    .ir-seat-button:hover {
+      background-color: #6a1b9a;
+    }
+
+    .tap-in-chain-button {
+      background: linear-gradient(135deg, #00897b, #00695c);
+      color: #fff;
+      box-shadow: 0 2px 8px rgba(0, 105, 92, 0.35);
+    }
+
+    .tap-in-chain-button:hover {
+      filter: brightness(1.05);
+    }
+
+    .seat-count-hint {
+      margin: 10px 0 0;
+      padding: 10px 12px;
+      font-size: 12px;
+      line-height: 1.45;
+      color: var(--text-secondary);
+      background: rgba(255, 152, 0, 0.12);
+      border-radius: 8px;
+      border: 1px solid rgba(255, 152, 0, 0.35);
+    }
+
+    .seat-count-hint code {
+      font-size: 11px;
+      background: rgba(0, 0, 0, 0.06);
+      padding: 1px 5px;
+      border-radius: 4px;
+    }
+
+    .status-pill {
+      display: inline-block;
+      margin-left: 6px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 700;
+      vertical-align: middle;
+    }
+
+    .waiting-pill {
+      background: rgba(255, 152, 0, 0.2);
+      color: #e65100;
+    }
+
+    .boarding-pill {
+      background: rgba(123, 31, 162, 0.15);
+      color: #6a1b9a;
+    }
+
+    .ir-sim-section {
+      margin-bottom: 24px;
+    }
+
+    .ir-sim-card {
+      background: var(--card-bg);
+      border: 2px dashed var(--border-color);
+      border-radius: 12px;
+      padding: 16px;
+      font-size: 13px;
+    }
+
+    .ir-sim-help {
+      color: var(--text-secondary);
+      line-height: 1.5;
+      margin-bottom: 12px;
+    }
+
+    .ir-sim-help code {
+      font-size: 11px;
+      background: var(--bg-secondary);
+      padding: 2px 6px;
+      border-radius: 4px;
+    }
+
+    .ir-sim-row {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      margin-bottom: 10px;
+    }
+
+    .ir-sim-label {
+      font-weight: 600;
+      color: var(--text-primary);
+      font-size: 12px;
+    }
+
+    .ir-sim-select,
+    .ir-sim-input {
+      padding: 10px 12px;
+      border: 2px solid var(--border-color);
+      border-radius: 8px;
+      font-size: 14px;
+      background: var(--bg-primary);
+    }
+
+    .ir-sim-buttons {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-top: 8px;
+    }
+
+    .ir-sim-btn {
+      padding: 10px 14px;
+      border: none;
+      border-radius: 8px;
+      font-weight: 600;
+      font-size: 13px;
+      cursor: pointer;
+      color: #fff;
+      text-align: left;
+    }
+
+    .ir-sim-btn-occ {
+      background: #6a1b9a;
+    }
+
+    .ir-sim-btn-free {
+      background: #1565c0;
+    }
+
+    .ir-sim-btn-timeout {
+      background: #546e7a;
+    }
+
+    .ir-sim-log {
+      margin-top: 12px;
+      max-height: 140px;
+      overflow-y: auto;
+      background: var(--bg-secondary);
+      border-radius: 8px;
+      padding: 8px;
+      font-family: ui-monospace, monospace;
+      font-size: 11px;
+    }
+
+    .ir-sim-log-line {
+      padding: 4px 0;
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    .ir-sim-log-line:last-child {
+      border-bottom: none;
     }
 
     .loading-container {
@@ -1592,7 +1959,7 @@
           <span class="driver-icon">🚌</span>
           <div>
             <h1 class="driver-title">Driver Simulation</h1>
-            <p class="driver-subtitle">Manual control only · RP4 handles tap-in/tap-out</p>
+            <p class="driver-subtitle">Simulate card taps + IR seatEvents (firmware-shaped)</p>
           </div>
         </div>
         <button id="refresh-btn" class="refresh-button">🔄 Refresh</button>
@@ -1637,15 +2004,53 @@
                 <span class="info-label">Seats:</span>
                 <span class="info-value" id="jeepney-seats">0/2</span>
               </div>
+              <p class="seat-count-hint" id="seat-count-hint">
+                <strong>Why 0/2?</strong> After a <em>card tap</em>, the Cloud Function sets the rider to <code>boarding</code> only — it does <strong>not</strong> add a seat yet.
+                The count goes up only when an <code>ir_occupied</code> seat event runs (button <strong>IR: seat taken</strong> or <strong>Tap + IR (auto)</strong> below).
+              </p>
             </div>
           </div>
         </div>
 
         <!-- Waiting Users Section -->
+        <!-- IR / seatEvents (match firmware docs in Firestore console) -->
+        <div class="users-section ir-sim-section">
+          <div class="section-header">
+            <span class="section-icon waiting">📡</span>
+            <h2 class="section-title">IR seat events</h2>
+          </div>
+          <div class="ir-sim-card">
+            <p class="ir-sim-help">
+              Path: <code>rp4_debug/cpe11-afcs/seatEvents/</code><br />
+              <strong>Where is <code>status: occupied</code>?</strong> Only on documents whose ID ends with <code>_ir_occupied</code> (field <code>status</code> = <code>occupied</code>).
+              Tap-out simulation creates <code>_ir_available</code> docs with <code>status: available</code> — those are usually the <em>newest</em> in the list, so it can look like “everything is available”. Search or sort by ID for <code>ir_occupied</code>.<br />
+              <strong>Parent doc</strong> <code>rp4_debug/cpe11-afcs</code> does not have a top-level “occupied” flag. When seated, open <code>seat1</code> or <code>seat2</code> and check <code>occupantUserId</code> (that means the seat is physically occupied).<br />
+              After the Cloud Function runs, each seat event also gets <code>functionResult</code> (<code>ir_occupied_applied</code> / <code>ir_available_applied</code>).
+            </p>
+            <div class="ir-sim-row">
+              <label class="ir-sim-label">Seat</label>
+              <select id="ir-sim-seat" class="ir-sim-select">
+                <option value="seat1">seat1</option>
+                <option value="seat2">seat2</option>
+              </select>
+            </div>
+            <div class="ir-sim-row">
+              <label class="ir-sim-label">Card UID (optional, for ir_occupied / ir_available)</label>
+              <input type="text" id="ir-sim-card-uid" class="ir-sim-input" placeholder="e.g. 042B6C02A51390 (empty = null)" />
+            </div>
+            <div class="ir-sim-buttons">
+              <button type="button" class="ir-sim-btn ir-sim-btn-occ" onclick="handleIrSimFire('ir_occupied')">ir_occupied · status occupied</button>
+              <button type="button" class="ir-sim-btn ir-sim-btn-free" onclick="handleIrSimFire('ir_available')">ir_available · status available</button>
+              <button type="button" class="ir-sim-btn ir-sim-btn-timeout" onclick="handleIrSimFire('pending_timeout')">pending_timeout (screenshot preset)</button>
+            </div>
+            <div class="ir-sim-log" id="ir-sim-log" aria-live="polite"></div>
+          </div>
+        </div>
+
         <div class="users-section">
           <div class="section-header">
             <span class="section-icon waiting">⏰</span>
-            <h2 class="section-title">Waiting for Boarding</h2>
+            <h2 class="section-title">Waiting / Boarding</h2>
             <span class="user-count" id="waiting-count">0</span>
           </div>
           <div id="waiting-users-list" class="users-list">
@@ -1667,7 +2072,7 @@
 
         <div class="driver-footer">
           <p class="footer-note">💡 This page auto-refreshes every 5 seconds. Click Refresh for immediate update.</p>
-          <p class="footer-note manual-only-note">📋 <strong>Manual control only.</strong> Tap-in / tap-out is done via RP4 + card reader; the main app (React) processes those taps.</p>
+          <p class="footer-note manual-only-note">📋 <strong>Flow:</strong> Simulate card tap → Cloud Function sets <code>boarding</code> + queue → press <strong>IR: seat taken</strong> or fire <strong>ir_occupied</strong> with card UID → user becomes <code>onboarded</code> and seat count increases.</p>
         </div>
       </div>
     </div>

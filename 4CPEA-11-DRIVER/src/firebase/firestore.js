@@ -195,68 +195,34 @@ export const subscribeUsersByStatus = (status, callback) => {
   })
 }
 
+/** Real-time users matching any of the given statuses (e.g. waiting + boarding) */
+export const subscribeUsersByStatuses = (statuses, callback) => {
+  if (!statuses?.length) {
+    callback([])
+    return () => {}
+  }
+  const usersRef = collection(db, COLLECTIONS.USERS)
+  const q = query(usersRef, where('status', 'in', statuses))
+  return onSnapshot(q, (snapshot) => {
+    const users = snapshot.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }))
+    callback(users)
+  })
+}
+
 /**
- * Check if a user has extended their route today (has multiple trip transactions)
- * @param {string} userId - User ID
- * @returns {Promise<boolean>} True if user has extended
+ * True when the commuter has completed an in-app route extension for the current ride
+ * (`users/{uid}.currentRideExtended`, set by commuter app; cleared when route/trip ends).
  */
 export const checkUserHasExtended = async (userId) => {
   try {
-    const { start, end } = getManilaDayRange()
-    const startTimestamp = Timestamp.fromDate(start)
-    const endTimestamp = Timestamp.fromDate(end)
-    
-    const txRef = collection(db, COLLECTIONS.TRANSACTIONS)
-    const q = query(
-      txRef,
-      where('userId', '==', userId),
-      where('type', '==', 'trip'),
-      where('timestamp', '>=', startTimestamp),
-      where('timestamp', '<=', endTimestamp)
-    )
-    
-    const snapshot = await getDocs(q)
-    // If user has 2+ trip transactions today, they've extended
-    return snapshot.size >= 2
+    if (!userId) return false
+    const userRef = doc(db, COLLECTIONS.USERS, userId)
+    const snap = await getDoc(userRef)
+    return snap.exists() && snap.data()?.currentRideExtended === true
   } catch (error) {
     console.error('Error checking if user extended:', error.message)
     return false
   }
-}
-
-/**
- * Subscribe to trip transactions for a specific user today
- * Used to detect when a user extends their route
- * @param {string} userId - User ID
- * @param {Function} callback - Callback function that receives the count of trip transactions
- * @returns {Function} Unsubscribe function
- */
-export const subscribeUserTripTransactions = (userId, callback) => {
-  if (!userId) {
-    callback(0)
-    return () => {}
-  }
-  
-  const { start, end } = getManilaDayRange()
-  const startTimestamp = Timestamp.fromDate(start)
-  const endTimestamp = Timestamp.fromDate(end)
-  
-  const txRef = collection(db, COLLECTIONS.TRANSACTIONS)
-  const q = query(
-    txRef,
-    where('userId', '==', userId),
-    where('type', '==', 'trip'),
-    where('timestamp', '>=', startTimestamp),
-    where('timestamp', '<=', endTimestamp)
-  )
-  
-  return onSnapshot(q, (snapshot) => {
-    // Return the count of trip transactions (2+ means extended)
-    callback(snapshot.size)
-  }, (error) => {
-    console.error('Error listening to user trip transactions:', error.message)
-    callback(0)
-  })
 }
 
 export const getActiveShift = async (userId) => {
@@ -551,6 +517,9 @@ export const extractGpsTerminalFromDoc = (data) => {
     }
     const s = String(v).trim()
     if (/^[1-4]$/.test(s)) return parseInt(s, 10)
+    // Firmware strings like "terminal4", "Terminal 3", "TERMINAL2"
+    const terminalWord = s.match(/terminal\s*([1-4])(?:\b|$)/i)
+    if (terminalWord) return parseInt(terminalWord[1], 10)
     const m = s.match(/\b([1-4])\b/)
     if (m) return parseInt(m[1], 10)
     const n = parseInt(s, 10)
@@ -725,32 +694,6 @@ export const updateJeepneyRoute = async (jeepneyId = 'jeep1', fromTerminal, toTe
     direction,
     updatedAt: serverTimestamp(),
   })
-}
-
-/**
- * Sync jeepney seatCount with actual number of onboarded users
- * This ensures the seatCount matches reality
- * @param {string} jeepneyId - Jeepney ID (default: 'jeep1')
- * @returns {Promise<void>}
- */
-export const syncJeepneySeatCount = async (jeepneyId = 'jeep1') => {
-  try {
-    // Get all users with status 'onboarded'
-    const onboardedUsers = await getUsersByStatus('onboarded')
-    const actualSeatCount = Math.min(onboardedUsers.length, 2) // Cap at max seats
-    
-    // Update jeepney seatCount to match actual count
-    const jeepneyRef = doc(db, 'jeepneys', jeepneyId)
-    await updateDoc(jeepneyRef, {
-      seatCount: actualSeatCount,
-      updatedAt: serverTimestamp()
-    })
-    
-    // Synced jeepney seatCount
-  } catch (error) {
-    console.error('Error syncing jeepney seatCount:', error.message)
-    throw error
-  }
 }
 
 /**

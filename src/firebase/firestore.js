@@ -157,6 +157,7 @@ export const createOrGetUser = async (userId, userData = {}) => {
         balance: 250.00,
         currentTerminal: 1,
         currentRoute: null,
+        currentRideExtended: false,
         language: 'English',
         theme: 'light',
         status: null,
@@ -296,14 +297,21 @@ export const updateUserTerminal = async (userId, terminal) => {
  * @param {object|null} route - Route object { from: number, to: number } or null
  * @returns {Promise<void>}
  */
+/**
+ * @param {object|null} route - null ends the trip and clears extension flag
+ */
 export const updateUserRoute = async (userId, route) => {
-  await updateUser(userId, { currentRoute: route });
-};
+  if (route == null) {
+    await updateUser(userId, { currentRoute: null, currentRideExtended: false })
+  } else {
+    await updateUser(userId, { currentRoute: route })
+  }
+}
 
 /**
  * Update user status (waiting, onboarded, default)
  * @param {string} userId - Firebase Auth UID
- * @param {string} status - Status: 'waiting', 'onboarded', or null (default)
+ * @param {string} status - Status: 'waiting', 'boarding', 'onboarded', or null (default)
  * @returns {Promise<void>}
  */
 export const updateUserStatus = async (userId, status) => {
@@ -312,7 +320,7 @@ export const updateUserStatus = async (userId, status) => {
 
 /**
  * Get all users with a specific status
- * @param {string} status - Status to filter by ('waiting', 'onboarded', or null for all)
+ * @param {string} status - Status to filter by ('waiting', 'boarding', 'onboarded', or null for all)
  * @returns {Promise<Array>} Array of user documents
  */
 export const getUsersByStatus = async (status = null) => {
@@ -334,8 +342,8 @@ export const getUsersByStatus = async (status = null) => {
     
     querySnapshot.forEach((doc) => {
       const data = doc.data();
-      // If no status filter, only return users with waiting or onboarded status
-      if (!status && data.status && (data.status === 'waiting' || data.status === 'onboarded')) {
+      // If no status filter, only return users with trip-relevant status
+      if (!status && data.status && (data.status === 'waiting' || data.status === 'boarding' || data.status === 'onboarded')) {
         users.push({
           id: doc.id,
           ...data
@@ -390,6 +398,7 @@ export const addTransaction = async (userId, transactionData) => {
       balanceAfter: transactionData.balanceAfter || null,
       route: transactionData.route || null,
       jeepneyId: transactionData.jeepneyId || null, // Store which jeepney was used
+      ...(transactionData.routeExtension === true ? { routeExtension: true } : {}),
       timestamp: serverTimestamp(),
       createdAt: serverTimestamp()
     });

@@ -27,6 +27,64 @@
   margin-bottom: 24px;
 }
 
+.route-plan-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  line-height: 1.4;
+}
+
+.route-plan-from,
+.route-plan-to {
+  font-size: 14px;
+  color: var(--text-primary);
+}
+
+.route-plan-arrow {
+  color: var(--text-secondary);
+  font-weight: 700;
+}
+
+.route-plan-placeholder {
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.route-section-heading {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0 0 14px;
+  padding-top: 8px;
+}
+
+.route-section-heading--destination {
+  margin-top: 28px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-color);
+}
+
+.route-section-list {
+  margin-bottom: 0;
+}
+
+.terminal-item--origin .terminal-main-info {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.terminal-item--origin .current-badge {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 8px;
+  background: rgba(30, 136, 229, 0.12);
+  color: var(--accent-primary-dark);
+}
+
 .terminal-highlight {
   color: var(--accent-success);
   font-weight: bold;

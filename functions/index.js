@@ -8,6 +8,22 @@ const { defineSecret } = require('firebase-functions/params');
 
 admin.initializeApp();
 
+/** Same mapping as Commuter `src/firebase/rp4Taps.js` — used by tap + seat IR handlers */
+const RP4_CARD_UID_TO_USER_ID = {
+  '04151F02A51390': '9ij7y7Az7hcES9qmjFAySjqMWeP2',
+  '04196702A51390': 'iJq7rGZsUcTZc6HeGAWcZUbHFWk1',
+  '041E6502A51390': 'uIsKhAzJECgPVcwJnDePCP1E7Ok1',
+  '04295B02A51390': 'Vc1owqvklzOV3PqkO4f98MsOb773',
+  '042B5D02A51390': '1WevZnMhS8da4Gtd0j2mrzNM50H2',
+  '042B6C02A51390': 'X4EdHVyllXO4RJkLgexzujFbjuU2',
+};
+
+function getUserIdFromCardUidRp4(cardUid) {
+  if (!cardUid || typeof cardUid !== 'string') return null;
+  const normalized = String(cardUid).trim().toUpperCase();
+  return RP4_CARD_UID_TO_USER_ID[normalized] || null;
+}
+
 // Define secrets for Gmail credentials (new method)
 const gmailUser = defineSecret('GMAIL_USER');
 const gmailAppPassword = defineSecret('GMAIL_APP_PASSWORD');
@@ -293,22 +309,6 @@ exports.processRp4Tap = functions.firestore
 
     console.log(`Processing tap ${tapId} for device ${deviceId}`, tapData);
 
-    // Card UID to Firebase Auth UID mapping (same as rp4Taps.js)
-    const CARD_UID_TO_USER_ID = {
-      '04151F02A51390': '9ij7y7Az7hcES9qmjFAySjqMWeP2',
-      '04196702A51390': 'iJq7rGZsUcTZc6HeGAWcZUbHFWk1',
-      '041E6502A51390': 'uIsKhAzJECgPVcwJnDePCP1E7Ok1',
-      '04295B02A51390': 'Vc1owqvklzOV3PqkO4f98MsOb773',
-      '042B5D02A51390': '1WevZnMhS8da4Gtd0j2mrzNM50H2',
-      '042B6C02A51390': 'X4EdHVyllXO4RJkLgexzujFbjuU2'
-    };
-
-    const getUserIdFromCardUid = (cardUid) => {
-      if (!cardUid || typeof cardUid !== 'string') return null;
-      const normalized = String(cardUid).trim().toUpperCase();
-      return CARD_UID_TO_USER_ID[normalized] || null;
-    };
-
     const calculateFare = (origin, destination) => {
       if (!origin || !destination || origin === destination) return 0;
       const fareTable = {
@@ -351,7 +351,7 @@ exports.processRp4Tap = functions.firestore
     };
 
     const cardUid = (tapData.uid || '').trim().toUpperCase();
-    const userId = getUserIdFromCardUid(cardUid);
+    const userId = getUserIdFromCardUidRp4(cardUid);
     const unknownResult = { known: false, active: false, reason: 'Unknown card', name: '' };
 
     if (!userId) {
@@ -372,102 +372,24 @@ exports.processRp4Tap = functions.firestore
     const userName = [user.firstName, user.lastName].filter(Boolean).join(' ') || user.email || 'Passenger';
     const status = user.status || null;
 
-    // Get jeepney
-    const jeepneyDoc = await admin.firestore().collection('jeepneys').doc('jeep1').get();
-    const jeepney = jeepneyDoc.exists ? jeepneyDoc.data() : { seatCount: 0, maxSeats: 2 };
-
-    // Tap-out: user is onboarded
+    // Onboarded: alight at seat ends trip (processSeatEvent). Card tap does not end the trip.
     if (status === 'onboarded') {
-      try {
-        // Double-tap guard: reject tap-out if user tapped in less than 3 seconds ago
-        const deviceDoc = await admin.firestore().collection('rp4_debug').doc(deviceId).get();
-        const deviceData = deviceDoc.exists ? deviceDoc.data() : {};
-        const seat1 = deviceData.seat1 || {};
-        const seat2 = deviceData.seat2 || {};
-        const occupiedAt = (seat1.occupantUserId === userId ? seat1.occupiedAt : null) ||
-          (seat2.occupantUserId === userId ? seat2.occupiedAt : null);
-        if (occupiedAt) {
-          const occupiedMs = occupiedAt.toMillis ? occupiedAt.toMillis() : (occupiedAt._seconds || 0) * 1000;
-          const elapsedMs = Date.now() - occupiedMs;
-          if (elapsedMs < 3000) {
-            const result = { known: true, active: false, reason: 'Already tapped in. Wait 3 seconds before tapping out.', name: userName };
-            await writeLastTap(deviceId, tapData, result);
-            await snap.ref.update({ processed: true, processedAt: admin.firestore.FieldValue.serverTimestamp() });
-            return null;
-          }
-        }
-
-        const userRef = admin.firestore().collection('users').doc(userId);
-        const jeepneyRef = admin.firestore().collection('jeepneys').doc('jeep1');
-        const deviceRef = admin.firestore().collection('rp4_debug').doc(deviceId);
-
-        // Use transaction for atomic tap-out: prevents race when IR + card tap fire together,
-        // or when two users tap out simultaneously (seat count going negative)
-        await admin.firestore().runTransaction(async (transaction) => {
-          const [userSnap, jeepneySnap, deviceSnap] = await Promise.all([
-            transaction.get(userRef),
-            transaction.get(jeepneyRef),
-            transaction.get(deviceRef)
-          ]);
-
-          const freshUser = userSnap.exists ? userSnap.data() : null;
-          if (freshUser?.status !== 'onboarded') {
-            throw new Error('ALREADY_TAPPED_OUT');
-          }
-
-          const freshJeepney = jeepneySnap.exists ? jeepneySnap.data() : { seatCount: 0, maxSeats: 2 };
-          const currentSeatCount = Math.max(0, freshJeepney.seatCount || 0);
-          const newSeatCount = currentSeatCount > 0 ? currentSeatCount - 1 : 0;
-
-          transaction.update(userRef, {
-            status: null,
-            currentRoute: null,
-            updatedAt: admin.firestore.FieldValue.serverTimestamp()
-          });
-
-          transaction.update(jeepneyRef, {
-            seatCount: newSeatCount,
-            updatedAt: admin.firestore.FieldValue.serverTimestamp()
-          });
-
-          // Clear seat assignment if user occupies a seat
-          const deviceData = deviceSnap.exists ? deviceSnap.data() : {};
-          const seat1 = deviceData.seat1 || {};
-          const seat2 = deviceData.seat2 || {};
-          const updates = {};
-          if (seat1.occupantUserId === userId) {
-            updates.seat1 = { occupantUid: null, occupantUserId: null, occupiedAt: null };
-            updates.seat1UpdatedAt = admin.firestore.FieldValue.serverTimestamp();
-          }
-          if (seat2.occupantUserId === userId) {
-            updates.seat2 = { occupantUid: null, occupantUserId: null, occupiedAt: null };
-            updates.seat2UpdatedAt = admin.firestore.FieldValue.serverTimestamp();
-          }
-          if (Object.keys(updates).length > 0) {
-            updates.updatedAt = admin.firestore.FieldValue.serverTimestamp();
-            transaction.update(deviceRef, updates);
-          }
-        });
-
-        const result = { known: true, active: true, reason: 'Tap out successful', name: userName };
-        await writeLastTap(deviceId, tapData, result);
-        await snap.ref.update({
-          processed: true,
-          processedAt: admin.firestore.FieldValue.serverTimestamp(),
-          active: result.active,
-          known: result.known,
-          reason: result.reason,
-          name: result.name
-        });
-        return null;
-      } catch (err) {
-        console.error('Tap-out error:', err);
-        const reason = err.message === 'ALREADY_TAPPED_OUT' ? 'Already tapped out' : (err.message || 'Tap out failed');
-        const result = { known: true, active: false, reason, name: userName };
-        await writeLastTap(deviceId, tapData, result);
-        await snap.ref.update({ processed: true, processedAt: admin.firestore.FieldValue.serverTimestamp() });
-        return null;
-      }
+      const result = {
+        known: true,
+        active: false,
+        reason: 'Please alight to finish your trip. Tapping your card again does not end your ride.',
+        name: userName
+      };
+      await writeLastTap(deviceId, tapData, result);
+      await snap.ref.update({
+        processed: true,
+        processedAt: admin.firestore.FieldValue.serverTimestamp(),
+        active: result.active,
+        known: result.known,
+        reason: result.reason,
+        name: result.name
+      });
+      return null;
     }
 
     // Tap-in: user must be waiting
@@ -480,100 +402,110 @@ exports.processRp4Tap = functions.firestore
 
     const route = user.currentRoute || { from: user.currentTerminal || 1, to: user.currentTerminal || 1 };
     const fare = calculateFare(route.from, route.to);
-    const balance = user.balance || 250;
-    const currentSeatCount = Math.max(0, jeepney.seatCount || 0);
-    const maxSeats = jeepney.maxSeats || 2;
-
-    if (balance < fare) {
-      const result = { known: true, active: false, reason: 'Insufficient balance', name: userName };
-      await writeLastTap(deviceId, tapData, result);
-      await snap.ref.update({ processed: true, processedAt: admin.firestore.FieldValue.serverTimestamp() });
-      return null;
-    }
-
-    if (currentSeatCount >= maxSeats) {
-      const result = { known: true, active: false, reason: 'Jeepney full', name: userName };
-      await writeLastTap(deviceId, tapData, result);
-      await snap.ref.update({ processed: true, processedAt: admin.firestore.FieldValue.serverTimestamp() });
-      return null;
-    }
 
     try {
-      // Use transaction to prevent double tap-in (race when user taps twice quickly)
-      await admin.firestore().runTransaction(async (transaction) => {
+      const tapRef = snap.ref;
+      // Single transaction: claim tap doc + deduct fare + queue for IR. Prevents double charge if a client also tries to process the same tap.
+      const outcome = await admin.firestore().runTransaction(async (transaction) => {
+        const tapSnap = await transaction.get(tapRef);
+        if (tapSnap.data()?.processed === true) {
+          return { kind: 'SKIP', reason: 'already_processed' };
+        }
+
         const userRef = admin.firestore().collection('users').doc(userId);
         const jeepneyRef = admin.firestore().collection('jeepneys').doc('jeep1');
-        const userSnap = await transaction.get(userRef);
-        const jeepneySnap = await transaction.get(jeepneyRef);
+        const deviceRef = admin.firestore().collection('rp4_debug').doc(deviceId);
+        const [userSnap, jeepneySnap, deviceSnap] = await Promise.all([
+          transaction.get(userRef),
+          transaction.get(jeepneyRef),
+          transaction.get(deviceRef)
+        ]);
         const freshUser = userSnap.exists ? userSnap.data() : null;
-        const freshJeepney = jeepneySnap.exists ? jeepneySnap.data() : { seatCount: 0, maxSeats: 2 };
         if (freshUser?.status !== 'waiting') {
-          throw new Error('ALREADY_PROCESSED'); // Another tap already processed
+          return { kind: 'ERR', code: 'ALREADY_PROCESSED' };
         }
+        const balance = Number(freshUser.balance ?? 0);
+        if (balance < fare) {
+          return { kind: 'ERR', code: 'INSUFFICIENT' };
+        }
+        const freshJeepney = jeepneySnap.exists ? jeepneySnap.data() : { seatCount: 0, maxSeats: 2 };
         const freshSeatCount = Math.max(0, freshJeepney.seatCount || 0);
         if (freshSeatCount >= (freshJeepney.maxSeats || 2)) {
-          throw new Error('JEEPNEY_FULL');
+          return { kind: 'ERR', code: 'JEEPNEY_FULL' };
         }
+
+        const newBalance = balance - fare;
         transaction.update(userRef, {
           balance: admin.firestore.FieldValue.increment(-fare),
-          status: 'onboarded',
+          status: 'boarding',
           updatedAt: admin.firestore.FieldValue.serverTimestamp()
         });
-        transaction.update(jeepneyRef, {
-          seatCount: freshSeatCount + 1,
+        const devData = deviceSnap.exists ? deviceSnap.data() : {};
+        const queue = Array.isArray(devData.boardingQueue) ? [...devData.boardingQueue] : [];
+        queue.push({ userId, cardUid, queuedAt: Date.now() });
+        transaction.update(deviceRef, {
+          boardingQueue: queue,
           updatedAt: admin.firestore.FieldValue.serverTimestamp()
         });
+        transaction.update(tapRef, {
+          processed: true,
+          processedAt: admin.firestore.FieldValue.serverTimestamp(),
+          active: false,
+          known: true,
+          reason: 'Fare paid. Take your seat.',
+          name: userName
+        });
+        return { kind: 'OK', newBalance, route };
       });
 
-      const newBalance = balance - fare;
+      if (outcome.kind === 'SKIP') {
+        console.log(`Tap ${tapId} already processed (transaction), skipping`);
+        return null;
+      }
+      if (outcome.kind === 'ERR') {
+        const reasonMap = {
+          ALREADY_PROCESSED: 'Already tapped in. Tap detected twice.',
+          INSUFFICIENT: 'Insufficient balance',
+          JEEPNEY_FULL: 'Jeepney full'
+        };
+        const result = {
+          known: true,
+          active: false,
+          reason: reasonMap[outcome.code] || 'Tap in failed',
+          name: userName
+        };
+        await writeLastTap(deviceId, tapData, result);
+        await snap.ref.update({
+          processed: true,
+          processedAt: admin.firestore.FieldValue.serverTimestamp(),
+          active: result.active,
+          known: result.known,
+          reason: result.reason,
+          name: result.name
+        });
+        return null;
+      }
+
       await admin.firestore().collection('transactions').add({
         userId: userId,
         type: 'trip',
         amount: -fare,
         description: `Trip: Terminal ${route.from} → Terminal ${route.to}`,
         route: route,
-        balanceAfter: newBalance,
+        balanceAfter: outcome.newBalance,
         jeepneyId: 'jeep1',
         timestamp: admin.firestore.FieldValue.serverTimestamp(),
         createdAt: admin.firestore.FieldValue.serverTimestamp()
       });
 
-      // Assign user to a seat (seat1 or seat2) BEFORE incrementing seat count
-      // Use current seat count to determine which seat (0 = seat1, 1 = seat2)
-      const currentSeatCount = jeepney.seatCount || 0;
-      const seatNumber = currentSeatCount === 0 ? 'seat1' : 'seat2';
+      const payResult = { known: true, active: false, reason: 'Fare paid. Take your seat.', name: userName };
+      await writeLastTap(deviceId, tapData, payResult);
 
-      const result = { known: true, active: true, reason: 'Valid card', name: userName };
-      await writeLastTap(deviceId, tapData, result);
-      await snap.ref.update({
-        processed: true,
-        processedAt: admin.firestore.FieldValue.serverTimestamp(),
-        active: result.active,
-        known: result.known,
-        reason: result.reason,
-        name: result.name
-      });
-
-      // Assign user to seat in device document
-      await admin.firestore().collection('rp4_debug').doc(deviceId).update({
-        [seatNumber]: {
-          occupantUid: cardUid, // Store card UID so we can identify who got out
-          occupantUserId: userId, // Also store Firebase Auth UID for easy lookup
-          occupiedAt: admin.firestore.FieldValue.serverTimestamp()
-        },
-        [`${seatNumber}UpdatedAt`]: admin.firestore.FieldValue.serverTimestamp()
-      });
-
-      console.log(`Tap-in successful for ${userName}, fare ₱${fare.toFixed(2)} deducted, assigned to ${seatNumber}`);
+      console.log(`Tap-in payment for ${userName}, fare ₱${fare.toFixed(2)} deducted; awaiting IR occupied for seat count`);
       return null;
     } catch (err) {
       console.error('Tap-in error:', err);
-      const reason = err.message === 'ALREADY_PROCESSED'
-        ? 'Already tapped in. Tap detected twice.'
-        : err.message === 'JEEPNEY_FULL'
-          ? 'Jeepney full'
-          : err.message || 'Tap in failed';
-      const result = { known: true, active: false, reason, name: userName };
+      const result = { known: true, active: false, reason: err.message || 'Tap in failed', name: userName };
       await writeLastTap(deviceId, tapData, result);
       await snap.ref.update({ processed: true, processedAt: admin.firestore.FieldValue.serverTimestamp() });
       return null;
@@ -589,6 +521,178 @@ exports.processSeatEvent = functions.firestore
     const eventData = snap.data();
     const deviceId = context.params.deviceId;
     const eventId = context.params.eventId;
+
+    // --- IR seat occupied: increment seatCount + assign seat (mirror path of decrement) ---
+    if (eventData.status === 'occupied') {
+      const occType = eventData.event || '';
+      if (occType !== 'ir_occupied' && occType !== 'BECAME_OCCUPIED') {
+        console.log(`Seat event ${eventId} status occupied but event not ir_occupied (got ${occType}), skipping`);
+        return null;
+      }
+
+      let seat = eventData.seatId || eventData.seat;
+      if (!seat && eventId.includes('_')) {
+        const parts = eventId.split('_');
+        if (parts.length >= 2 && (parts[1] === 'seat1' || parts[1] === 'seat2')) seat = parts[1];
+      }
+      if (!seat || !seat.startsWith('seat')) {
+        console.log(`Invalid seat in occupied event ${eventId}: ${seat}`);
+        return null;
+      }
+
+      const writeLastTapFromSeat = async (tapUid, result) => {
+        const now = new Date().toISOString();
+        const lastTap = {
+          uid: tapUid || '',
+          deviceId: deviceId,
+          known: result.known !== false,
+          active: result.active === true,
+          reason: result.reason || 'Unknown',
+          name: result.name || '',
+          source: eventData.source || 'ir',
+          ts: eventData.tsMs || eventData.ts || Date.now(),
+          sentAt: now
+        };
+        await admin.firestore().collection('rp4_debug').doc(deviceId).update({
+          lastTap: lastTap,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp()
+        });
+        await admin.database().ref(`rp4/${deviceId}/lastTap`).set({
+          ...lastTap,
+          updatedAt: Date.now()
+        });
+      };
+
+      const deviceDoc = await admin.firestore().collection('rp4_debug').doc(deviceId).get();
+      if (!deviceDoc.exists) {
+        console.log(`Device ${deviceId} not found for occupied event`);
+        return null;
+      }
+
+      const deviceDataPre = deviceDoc.data();
+      const cardFromEvent = (eventData.uid || eventData.cardUid || '').trim().toUpperCase();
+      let resolvedUserId = getUserIdFromCardUidRp4(cardFromEvent);
+      let resolvedCardUid = cardFromEvent || null;
+
+      const queue = Array.isArray(deviceDataPre.boardingQueue) ? [...deviceDataPre.boardingQueue] : [];
+      if (!resolvedUserId && queue.length > 0) {
+        const head = queue[0];
+        if (head && head.userId) {
+          resolvedUserId = head.userId;
+          resolvedCardUid = (head.cardUid || '').trim().toUpperCase() || resolvedCardUid;
+        }
+      }
+
+      if (!resolvedUserId) {
+        console.log(`Occupied event ${eventId}: no user from uid/cardUid and empty boardingQueue`);
+        return null;
+      }
+
+      const userDoc = await admin.firestore().collection('users').doc(resolvedUserId).get();
+      if (!userDoc.exists) {
+        console.log(`User ${resolvedUserId} not found for occupied event`);
+        return null;
+      }
+      const user = userDoc.data();
+      const userName = [user.firstName, user.lastName].filter(Boolean).join(' ') || user.email || 'Passenger';
+
+      if (user.status !== 'boarding') {
+        console.log(`User ${resolvedUserId} not in boarding (status: ${user.status}), skipping ir_occupied`);
+        return null;
+      }
+
+      try {
+        await admin.firestore().runTransaction(async (transaction) => {
+          const userRef = admin.firestore().collection('users').doc(resolvedUserId);
+          const jeepneyRef = admin.firestore().collection('jeepneys').doc('jeep1');
+          const deviceRef = admin.firestore().collection('rp4_debug').doc(deviceId);
+
+          const [userSnap, jeepneySnap, deviceSnap] = await Promise.all([
+            transaction.get(userRef),
+            transaction.get(jeepneyRef),
+            transaction.get(deviceRef)
+          ]);
+
+          const freshUser = userSnap.exists ? userSnap.data() : null;
+          if (freshUser?.status !== 'boarding') {
+            return;
+          }
+
+          const freshJeepney = jeepneySnap.exists ? jeepneySnap.data() : { seatCount: 0, maxSeats: 2 };
+          const currentSeatCount = Math.max(0, freshJeepney.seatCount || 0);
+          const maxSeats = freshJeepney.maxSeats || 2;
+          if (currentSeatCount >= maxSeats) {
+            throw new Error('JEEPNEY_FULL');
+          }
+
+          const devData = deviceSnap.exists ? deviceSnap.data() : {};
+          const seatData = devData[seat] || {};
+          if (seatData.occupantUserId && seatData.occupantUserId !== resolvedUserId) {
+            throw new Error('SEAT_TAKEN');
+          }
+          if (seatData.occupantUserId === resolvedUserId) {
+            return; // idempotent
+          }
+
+          let newQueue = Array.isArray(devData.boardingQueue) ? [...devData.boardingQueue] : [];
+          if (cardFromEvent) {
+            newQueue = newQueue.filter((e) => e.userId !== resolvedUserId);
+          } else {
+            newQueue = newQueue.slice(1);
+          }
+
+          transaction.update(userRef, {
+            status: 'onboarded',
+            updatedAt: admin.firestore.FieldValue.serverTimestamp()
+          });
+
+          transaction.update(jeepneyRef, {
+            seatCount: currentSeatCount + 1,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp()
+          });
+
+          transaction.update(deviceRef, {
+            [seat]: {
+              occupantUid: resolvedCardUid || cardFromEvent,
+              occupantUserId: resolvedUserId,
+              occupiedAt: admin.firestore.FieldValue.serverTimestamp()
+            },
+            [`${seat}UpdatedAt`]: admin.firestore.FieldValue.serverTimestamp(),
+            boardingQueue: newQueue,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp()
+          });
+        });
+
+        const userAfter = await admin.firestore().collection('users').doc(resolvedUserId).get();
+        if (!userAfter.exists || userAfter.data().status !== 'onboarded') {
+          console.log(`ir_occupied ${eventId}: transaction skipped or no-op`);
+          return null;
+        }
+
+        await writeLastTapFromSeat(resolvedCardUid || cardFromEvent, {
+          known: true,
+          active: true,
+          reason: 'Boarded',
+          name: userName
+        });
+        // Keep status: "occupied" on the event doc; add ack so Console shows it was handled
+        await snap.ref.update({
+          functionProcessedAt: admin.firestore.FieldValue.serverTimestamp(),
+          functionResult: 'ir_occupied_applied'
+        });
+        console.log(`IR occupied: ${userName} seated at ${seat}, seatCount incremented`);
+        return null;
+      } catch (err) {
+        if (err.message === 'JEEPNEY_FULL') {
+          console.log(`Occupied event ${eventId}: jeepney full`);
+        } else if (err.message === 'SEAT_TAKEN') {
+          console.log(`Occupied event ${eventId}: seat already taken`);
+        } else {
+          console.error('IR occupied error:', err);
+        }
+        return null;
+      }
+    }
 
     // Only process ir_available (user got off) or legacy BECAME_AVAILABLE - skip boot_state, tap_reserved, etc.
     if (eventData.status !== 'available') {
@@ -688,6 +792,7 @@ exports.processSeatEvent = functions.firestore
         transaction.update(userRef, {
           status: null,
           currentRoute: null,
+          currentRideExtended: false,
           updatedAt: admin.firestore.FieldValue.serverTimestamp()
         });
 
@@ -713,6 +818,10 @@ exports.processSeatEvent = functions.firestore
         updatedAt: Date.now()
       });
 
+      await snap.ref.update({
+        functionProcessedAt: admin.firestore.FieldValue.serverTimestamp(),
+        functionResult: 'ir_available_applied'
+      });
       console.log(`Tap-out successful for ${userName} from ${seat}`);
       return null;
     } catch (err) {

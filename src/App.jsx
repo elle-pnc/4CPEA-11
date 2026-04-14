@@ -4,7 +4,6 @@ import LoginPage from './pages/LoginPage'
 import TwoStepVerificationPage from './pages/TwoStepVerificationPage'
 import CommuterDashboard from './pages/CommuterDashboard'
 import ChooseDestinationPage from './pages/ChooseDestinationPage'
-import SelectOriginPage from './pages/SelectOriginPage'
 import UserProfilePage from './pages/UserProfilePage'
 import HistoryPage from './pages/HistoryPage'
 import SettingsPage from './pages/SettingsPage'
@@ -30,7 +29,7 @@ function App() {
   const [accessDeniedMessage, setAccessDeniedMessage] = useState(null)
   const [userData, setUserData] = useState({ 
     currentTerminal: 1, 
-    balance: 250.00, 
+    balance: 0,
     currentRoute: null,
     transactions: [], // Array to store all transactions (top-ups, trips, etc.)
     language: 'English', // Default language
@@ -113,7 +112,7 @@ function App() {
           // No userData yet, use defaults
           setUserData({
             currentTerminal: 1,
-            balance: 250.00,
+            balance: 0,
             currentRoute: null,
             transactions: [],
             language: 'English',
@@ -133,7 +132,7 @@ function App() {
         const currentTheme = userData?.theme || getInitialTheme()
         setUserData({ 
           currentTerminal: 1, 
-          balance: 250.00, 
+          balance: 0, 
           currentRoute: null, 
           transactions: [], 
           language: 'English', 
@@ -213,7 +212,7 @@ function App() {
       const currentTheme = userData?.theme || getInitialTheme()
       setUserData({ 
         currentTerminal: 1, 
-        balance: 250.00, 
+        balance: 0, 
         currentRoute: null, 
         transactions: [], 
         language: 'English', 
@@ -341,19 +340,9 @@ function App() {
                 )
               } 
             />
-            <Route 
-              path="/select-origin" 
-              element={
-                isAuthenticated && currentUser ? (
-                  <SelectOriginPage 
-                    currentUser={currentUser}
-                    userData={userData}
-                    setUserData={setUserData}
-                  />
-                ) : (
-                  <Navigate to="/login" replace />
-                )
-              } 
+            <Route
+              path="/select-origin"
+              element={<Navigate to="/choose-destination" replace state={{ mode: 'choose' }} />}
             />
             <Route 
               path="/history" 

@@ -1,8 +1,8 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { MdLocationOn } from 'react-icons/md'
 import { getTranslations } from '../translations'
-import { updateUserRoute, addTransaction, updateUserBalance, updateUserStatus, getUserTransactions } from '../firebase/firestore'
+import { updateUser, updateUserRoute, updateUserTerminal, addTransaction, updateUserBalance, updateUserStatus, getUserTransactions } from '../firebase/firestore'
 import { calculateFare } from '../utils/fareCalculator'
 import './ChooseDestinationPage.css'
 
@@ -12,10 +12,13 @@ const ChooseDestinationPage = ({ currentUser, userData, setUserData }) => {
   const mode = location.state?.mode || 'choose' // 'choose' or 'extend'
   const currentRoute = location.state?.currentRoute || null
 
-  const currentTerminal = userData?.currentTerminal || 1
   const currentLanguage = userData?.language || 'English'
   const t = getTranslations(currentLanguage)
   const [allTerminals] = useState([1, 2, 3, 4])
+  /** Origin (choose mode only); destination selection */
+  const [selectedOrigin, setSelectedOrigin] = useState(1)
+  const initialOriginRef = useRef(1)
+  const originHydratedRef = useRef(false)
   const [selectedTerminal, setSelectedTerminal] = useState(null)
   const [showWarningModal, setShowWarningModal] = useState(false)
   const [showErrorModal, setShowErrorModal] = useState(false)
@@ -24,11 +27,21 @@ const ChooseDestinationPage = ({ currentUser, userData, setUserData }) => {
   const [pendingExtendTerminal, setPendingExtendTerminal] = useState(null)
 
   const [availableTerminals, setAvailableTerminals] = useState([])
-  
+
+  useEffect(() => {
+    if (mode !== 'choose' || originHydratedRef.current) return
+    const t0 = userData?.currentTerminal
+    if (t0 != null) {
+      setSelectedOrigin(t0)
+      initialOriginRef.current = t0
+      originHydratedRef.current = true
+    }
+  }, [mode, userData?.currentTerminal])
+
   // Calculate fare for selected terminal
   const getFareForTerminal = (terminal) => {
     if (mode === 'choose') {
-      return calculateFare(currentTerminal, terminal)
+      return calculateFare(selectedOrigin, terminal)
     } else if (mode === 'extend' && currentRoute) {
       // For extension, calculate fare from current destination to new terminal
       return calculateFare(currentRoute.to, terminal)
@@ -38,8 +51,7 @@ const ChooseDestinationPage = ({ currentUser, userData, setUserData }) => {
 
   useEffect(() => {
     if (mode === 'choose') {
-      // Filter out current terminal
-      setAvailableTerminals(allTerminals.filter(t => t !== currentTerminal))
+      setAvailableTerminals(allTerminals.filter((term) => term !== selectedOrigin))
     } else if (mode === 'extend' && currentRoute) {
       // For extend mode, show terminals that can be extended to
       // Logic: Extend in the same direction, but can't extend beyond end terminals
@@ -69,9 +81,14 @@ const ChooseDestinationPage = ({ currentUser, userData, setUserData }) => {
         setAvailableTerminals([])
       }
     }
-  }, [mode, currentTerminal, currentRoute, allTerminals])
+  }, [mode, selectedOrigin, currentRoute, allTerminals])
 
-  const handleSelectTerminal = (terminal) => {
+  const handleSelectOrigin = (terminal) => {
+    setSelectedOrigin(terminal)
+    setSelectedTerminal((prev) => (prev === terminal ? null : prev))
+  }
+
+  const handleSelectDestination = (terminal) => {
     setSelectedTerminal(terminal)
   }
 
@@ -86,32 +103,33 @@ const ChooseDestinationPage = ({ currentUser, userData, setUserData }) => {
     }
 
     const tDesc = getTranslations(userData?.language || 'English')
-    const fare = calculateFare(currentTerminal, selectedTerminal)
     const changeRoute = location.state?.changeRoute || false
 
     try {
       if (mode === 'choose') {
-        // Set new route (or change existing route)
         const newRoute = {
-          from: currentTerminal,
+          from: selectedOrigin,
           to: selectedTerminal
         }
-        
-        // Update route in Firestore
+
+        await updateUserTerminal(currentUser.uid, selectedOrigin)
         await updateUserRoute(currentUser.uid, newRoute)
-        
+        await updateUser(currentUser.uid, { currentRideExtended: false })
+
         // When changing route, always reset status to waiting for the new route
         // This ensures the new route requires a new tap in
         await updateUserStatus(currentUser.uid, 'waiting')
         
         // Don't deduct fare yet - will be deducted on tap in
-        const newBalance = userData?.balance || 250.00
+        const newBalance = Number(userData?.balance ?? 0)
         
         // Don't create transaction yet - will be created on tap in
         
         setUserData({
           ...userData,
+          currentTerminal: selectedOrigin,
           currentRoute: newRoute,
+          currentRideExtended: false,
           balance: newBalance,
           status: changeRoute ? 'waiting' : (userData?.status || 'waiting')
         })
@@ -151,15 +169,17 @@ const ChooseDestinationPage = ({ currentUser, userData, setUserData }) => {
       
       await updateUserRoute(currentUser.uid, fullExtendedRoute)
       await updateUserBalance(currentUser.uid, -fare)
-      const newBalance = (userData?.balance || 250.00) - fare
-      
+      await updateUser(currentUser.uid, { currentRideExtended: true })
+      const newBalance = Number(userData?.balance ?? 0) - fare
+
       const extendedTransactionId = await addTransaction(currentUser.uid, {
         type: 'trip',
         amount: -fare,
         description: `${tDesc.extendTo} ${tDesc.terminal} ${extendedRoute.from} → ${tDesc.terminal} ${extendedRoute.to}`,
         route: extendedRoute,
         balanceAfter: newBalance,
-        jeepneyId: 'jeep1' // Store which jeepney was used
+        jeepneyId: 'jeep1', // Store which jeepney was used
+        routeExtension: true,
       })
       
       let allTransactions = []
@@ -183,6 +203,7 @@ const ChooseDestinationPage = ({ currentUser, userData, setUserData }) => {
       setUserData({
         ...userData,
         currentRoute: fullExtendedRoute,
+        currentRideExtended: true,
         balance: newBalance,
         status: 'onboarded',
         transactions: allTransactions
@@ -206,7 +227,13 @@ const ChooseDestinationPage = ({ currentUser, userData, setUserData }) => {
   }
 
   const handleBack = () => {
-    if (selectedTerminal) {
+    if (mode === 'extend') {
+      if (selectedTerminal) setShowWarningModal(true)
+      else navigate('/dashboard')
+      return
+    }
+    const originChanged = selectedOrigin !== initialOriginRef.current
+    if (selectedTerminal != null || originChanged) {
       setShowWarningModal(true)
     } else {
       navigate('/dashboard')
@@ -216,6 +243,7 @@ const ChooseDestinationPage = ({ currentUser, userData, setUserData }) => {
   const handleConfirmBack = () => {
     setShowWarningModal(false)
     setSelectedTerminal(null)
+    setSelectedOrigin(initialOriginRef.current)
     navigate('/dashboard')
   }
 
@@ -232,27 +260,78 @@ const ChooseDestinationPage = ({ currentUser, userData, setUserData }) => {
           </h1>
         </div>
 
-        <div className="current-location-display">
-          {t.currentLocation}: <span className="terminal-highlight">{t.terminal} {currentTerminal}</span>
-        </div>
+        {mode === 'choose' && (
+          <div className="current-location-display route-plan-summary">
+            <span className="route-plan-from">
+              {t.from}: <span className="terminal-highlight">{t.terminal} {selectedOrigin}</span>
+            </span>
+            <span className="route-plan-arrow" aria-hidden>
+              →
+            </span>
+            <span className="route-plan-to">
+              {selectedTerminal != null ? (
+                <>
+                  {t.terminal} <span className="terminal-highlight">{selectedTerminal}</span>
+                </>
+              ) : (
+                <span className="route-plan-placeholder">{t.chooseDestination}</span>
+              )}
+            </span>
+          </div>
+        )}
+
+        {mode === 'extend' && currentRoute && (
+          <div className="current-location-display">
+            {t.currentLocation}:{' '}
+            <span className="terminal-highlight">
+              {t.terminal} {currentRoute.to}
+            </span>
+          </div>
+        )}
 
         <div className="terminals-container">
-          <div className="current-terminal-section">
-            <div className="current-terminal-label">Terminal {currentTerminal}</div>
-          </div>
-
           <div className="action-buttons-section">
             {mode === 'choose' && (
-              <button className="back-button" onClick={handleBack}>
+              <button type="button" className="back-button" onClick={handleBack}>
                 ← {t.back}
               </button>
             )}
             {mode === 'extend' && currentRoute && (
-              <button className="extend-button" onClick={() => navigate('/dashboard')}>
+              <button type="button" className="extend-button" onClick={() => navigate('/dashboard')}>
                 ← {t.back}
               </button>
             )}
           </div>
+
+          {mode === 'choose' && (
+            <>
+              <h2 className="route-section-heading">{t.selectOriginTerminal}</h2>
+              <div className="available-terminals-list route-section-list">
+                {allTerminals.map((terminal) => (
+                  <button
+                    key={`origin-${terminal}`}
+                    type="button"
+                    className={`terminal-item terminal-item--origin ${selectedOrigin === terminal ? 'selected' : ''}`}
+                    onClick={() => handleSelectOrigin(terminal)}
+                  >
+                    <div className="terminal-info">
+                      <div className="terminal-main-info">
+                        <span className="terminal-name">
+                          {t.terminal} {terminal}
+                        </span>
+                        {terminal === initialOriginRef.current && (
+                          <span className="current-badge">{t.currentOrigin}</span>
+                        )}
+                      </div>
+                      <MdLocationOn className="location-pin" />
+                    </div>
+                  </button>
+                ))}
+              </div>
+
+              <h2 className="route-section-heading route-section-heading--destination">{t.chooseDestination}</h2>
+            </>
+          )}
 
           <div className="available-terminals-list">
             {availableTerminals.length > 0 ? (
@@ -261,8 +340,9 @@ const ChooseDestinationPage = ({ currentUser, userData, setUserData }) => {
                 return (
                   <button
                     key={terminal}
+                    type="button"
                     className={`terminal-item ${selectedTerminal === terminal ? 'selected' : ''}`}
-                    onClick={() => handleSelectTerminal(terminal)}
+                    onClick={() => handleSelectDestination(terminal)}
                   >
                     <div className="terminal-info">
                       <div className="terminal-main-info">
@@ -281,19 +361,19 @@ const ChooseDestinationPage = ({ currentUser, userData, setUserData }) => {
             )}
           </div>
 
-            {selectedTerminal && (
-              <div className="confirm-section">
-                <div className="fare-summary">
-                  <div className="fare-summary-item">
-                    <span className="fare-label">Fare:</span>
-                    <span className="fare-amount">₱{getFareForTerminal(selectedTerminal).toFixed(2)}</span>
-                  </div>
+          {selectedTerminal && (
+            <div className="confirm-section">
+              <div className="fare-summary">
+                <div className="fare-summary-item">
+                  <span className="fare-label">Fare:</span>
+                  <span className="fare-amount">₱{getFareForTerminal(selectedTerminal).toFixed(2)}</span>
                 </div>
-                <button className="confirm-button" onClick={handleConfirm}>
-                  {t.confirmSelection}
-                </button>
               </div>
-            )}
+              <button type="button" className="confirm-button" onClick={handleConfirm}>
+                {t.confirmSelection}
+              </button>
+            </div>
+          )}
         </div>
       </div>
 

@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { MdPerson, MdCheckCircle, MdSchedule, MdDirectionsBus, MdSwapHoriz, MdEdit } from 'react-icons/md'
 import { getUsersByStatus, updateUserStatus, updateUserBalance, addTransaction, updateUserRoute, getJeepney, updateJeepney, updateJeepneySeatCount, updateJeepneyRoute, initializeJeepney } from '../firebase/firestore'
-import { subscribeToTaps, processTap, RP4_DEVICE_ID } from '../firebase/rp4Taps'
+import { subscribeToTaps, RP4_DEVICE_ID } from '../firebase/rp4Taps'
 import { getTranslations } from '../translations'
 import { calculateFare } from '../utils/fareCalculator'
 import { doc, onSnapshot } from 'firebase/firestore'
@@ -30,11 +30,12 @@ const DriverSimulationPage = () => {
   const loadUsers = async () => {
     try {
       setRefreshing(true)
-      const [waiting, onboarded] = await Promise.all([
+      const [waiting, boarding, onboarded] = await Promise.all([
         getUsersByStatus('waiting'),
+        getUsersByStatus('boarding'),
         getUsersByStatus('onboarded')
       ])
-      setWaitingUsers(waiting || [])
+      setWaitingUsers([...(waiting || []), ...(boarding || [])])
       setOnboardedUsers(onboarded || [])
     } catch (error) {
       console.error('Error loading users:', error)
@@ -85,15 +86,14 @@ const DriverSimulationPage = () => {
     loadJeepney()
   }, [])
 
-  // RP4: listen for card taps and process tap-in / tap-out automatically
+  // RP4: refresh UI when new taps arrive. Do not call processTap here — processRp4Tap (Cloud Function) owns payment + boardingQueue (avoids double charge vs this client). Use Firebase emulators with functions enabled, or deploy functions, when testing taps.
   useEffect(() => {
     const unsubscribe = subscribeToTaps(RP4_DEVICE_ID, async (tapDocId, tapData) => {
-      const result = await processTap(tapDocId, tapData, jeepney)
-      setLastRp4Tap({ tapDocId, ...tapData, result, at: new Date().toISOString() })
+      setLastRp4Tap({ tapDocId, ...tapData, at: new Date().toISOString() })
       await loadUsers()
     })
     return () => unsubscribe()
-  }, [jeepney])
+  }, [])
 
   useEffect(() => {
     loadUsers()
@@ -124,13 +124,10 @@ const DriverSimulationPage = () => {
       
       // Deduct fare from balance
       await updateUserBalance(user.id, -fare)
-      const newBalance = (user.balance || 250.00) - fare
+      const newBalance = Number(user.balance ?? 0) - fare
 
-      // Change status to onboarded
-      await updateUserStatus(user.id, 'onboarded')
-
-      // Update jeepney seat count
-      await updateJeepneySeatCount('jeep1', currentSeatCount + 1)
+      // Match production: paid + boarding; seatCount increments on IR ir_occupied (Cloud Function).
+      await updateUserStatus(user.id, 'boarding')
 
       // Create transaction record for regular route
       // Note: Extended routes are handled automatically when user extends (payment deducted immediately)
@@ -167,7 +164,7 @@ const DriverSimulationPage = () => {
     if (!user.id) return
 
     try {
-      // Store trip details before clearing
+      // Sim-only shortcut: production ends trips via seat IR (ir_available) + Cloud Function. This button clears the commuter and adjusts seatCount for local testing without firmware events.
       const completedRoute = user.currentRoute || null
       const routeInfo = completedRoute 
         ? `Terminal ${completedRoute.from} → Terminal ${completedRoute.to}`
